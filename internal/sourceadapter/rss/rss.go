@@ -1,4 +1,6 @@
-// Package rss implements SourceAdapter for RSS, Atom, and RDF feeds.
+// Package rss implements SourceAdapter for RSS, Atom, and RDF feeds, and
+// exposes a FetchFeed primitive that other adapters (youtube, substack,
+// generic web) wrap when they ultimately resolve to an RSS/Atom source.
 //
 // source_item_id resolution order: entry.GUID, then entry.Link. Items lacking
 // both are skipped (they have no stable dedup key).
@@ -18,7 +20,7 @@ import (
 	"github.com/thebitmonk/ai_newsletter/internal/sources"
 )
 
-// Adapter is the RSS/Atom SourceAdapter.
+// Adapter is the RSS/Atom SourceAdapter and feed-fetch primitive.
 type Adapter struct {
 	client *http.Client
 	parser *gofeed.Parser
@@ -32,17 +34,16 @@ func New() *Adapter {
 	return &Adapter{client: c, parser: p}
 }
 
-// Fetch retrieves the feed at source.Identifier and converts its entries into
-// Items. Per-entry errors (missing GUID and Link) are skipped silently; a
-// fetch-level failure (network, parse) is returned as a *FetchError.
-func (a *Adapter) Fetch(ctx context.Context, source sources.Source) ([]candidates.Item, error) {
-	if source.Type != sources.TypeRSS && source.Type != sources.TypeSubstack {
-		return nil, &sourceadapter.FetchError{
-			Code:    "wrong_type",
-			Wrapped: fmt.Errorf("rss adapter received source type %q", source.Type),
-		}
-	}
-	feed, err := a.parser.ParseURLWithContext(source.Identifier, ctx)
+// HTTPClient returns the adapter's HTTP client so wrapping adapters that need
+// to make their own requests (e.g. the generic-web autodiscovery probe) can
+// reuse the same timeout settings.
+func (a *Adapter) HTTPClient() *http.Client { return a.client }
+
+// FetchFeed fetches and parses the feed at url and returns its items as
+// Candidate Items. The same function is used by Fetch (Source-driven) and by
+// other adapters that resolve to an RSS URL.
+func (a *Adapter) FetchFeed(ctx context.Context, url string) ([]candidates.Item, error) {
+	feed, err := a.parser.ParseURLWithContext(url, ctx)
 	if err != nil {
 		return nil, &sourceadapter.FetchError{Code: "parse", Wrapped: err}
 	}
@@ -56,9 +57,9 @@ func (a *Adapter) Fetch(ctx context.Context, source sources.Source) ([]candidate
 		if id == "" {
 			continue // no stable dedup key — skip
 		}
-		url := e.Link
-		if url == "" {
-			url = id
+		linkURL := e.Link
+		if linkURL == "" {
+			linkURL = id
 		}
 
 		raw, _ := json.Marshal(e)
@@ -71,11 +72,23 @@ func (a *Adapter) Fetch(ctx context.Context, source sources.Source) ([]candidate
 
 		items = append(items, candidates.Item{
 			SourceItemID: id,
-			URL:          url,
+			URL:          linkURL,
 			Title:        e.Title,
 			Raw:          raw,
 			PublishedAt:  published,
 		})
 	}
 	return items, nil
+}
+
+// Fetch is the SourceAdapter contract. RSS uses source.Identifier directly;
+// Substack appends /feed via the substack adapter (not this one).
+func (a *Adapter) Fetch(ctx context.Context, source sources.Source) ([]candidates.Item, error) {
+	if source.Type != sources.TypeRSS {
+		return nil, &sourceadapter.FetchError{
+			Code:    "wrong_type",
+			Wrapped: fmt.Errorf("rss adapter received source type %q", source.Type),
+		}
+	}
+	return a.FetchFeed(ctx, source.Identifier)
 }

@@ -19,6 +19,10 @@ import (
 	"github.com/thebitmonk/ai_newsletter/internal/server"
 	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter"
 	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter/rss"
+	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter/substack"
+	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter/web"
+	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter/xhandle"
+	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter/youtube"
 	"github.com/thebitmonk/ai_newsletter/internal/sources"
 )
 
@@ -82,9 +86,13 @@ func maybeStartWorkers(ctx context.Context, pool *pgxpool.Pool) ([]server.Option
 
 	// Source poller.
 	candStore := candidates.NewStore(pool)
+	feed := rss.New()
 	reg := sourceadapter.NewRegistry()
-	reg.Register(sources.TypeRSS, rss.New())
-	reg.Register(sources.TypeSubstack, rss.New())
+	reg.Register(sources.TypeRSS, feed)
+	reg.Register(sources.TypeSubstack, substack.New(feed))
+	reg.Register(sources.TypeYouTubeChannel, youtube.New(feed))
+	reg.Register(sources.TypeWeb, web.New(feed))
+	reg.Register(sources.TypeXHandle, xhandle.New())
 	poller := sourceadapter.NewPoller(pool, reg, candStore, prod)
 	pollerConsumer, err := nsqx.Subscribe(lookupdAddr, sourceadapter.PollTopic, "poller",
 		poller.HandleMessage, nsqx.ConsumerOpts{MaxInFlight: 4})

@@ -13,12 +13,34 @@ import (
 	"github.com/thebitmonk/ai_newsletter/internal/sources"
 )
 
+type config struct {
+	sourcePostCreate sources.PostCreateHook
+}
+
+// Option mutates the server config.
+type Option func(*config)
+
+// WithSourcePostCreateHook wires a callback fired after each successful
+// Source create. The poller uses this to bootstrap polling for a newly added
+// Source immediately rather than waiting for the supervisor sweep.
+func WithSourcePostCreateHook(h sources.PostCreateHook) Option {
+	return func(c *config) { c.sourcePostCreate = h }
+}
+
 // New returns a fully-wired Gin engine. The caller owns the pool's lifecycle.
-func New(pool *pgxpool.Pool) *gin.Engine {
+func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
+	cfg := &config{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
 	sessions := auth.NewSessionStore(pool)
 	authHandlers := auth.NewHandlers(pool, sessions)
 	pubHandlers := publications.NewHandlers(publications.NewStore(pool))
 	srcHandlers := sources.NewHandlers(sources.NewStore(pool))
+	if cfg.sourcePostCreate != nil {
+		srcHandlers.SetPostCreateHook(cfg.sourcePostCreate)
+	}
 
 	r := gin.New()
 	r.Use(gin.Recovery())

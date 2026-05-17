@@ -78,7 +78,7 @@ func migrateUp(dbURL string) error {
 func truncate(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`truncate issues, sources, publications, sessions, account_members, users, accounts cascade`)
+		`truncate candidates, issues, sources, publications, sessions, account_members, users, accounts cascade`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

@@ -12,12 +12,25 @@ import (
 	"github.com/thebitmonk/ai_newsletter/internal/httpx"
 )
 
+// PostCreateHook is called after a Source is successfully created. The
+// poller uses this to publish a bootstrap source.poll NSQ message so the
+// new Source starts polling immediately rather than waiting for the next
+// supervisor sweep. Nil hook is fine (HTTP-only dev mode).
+type PostCreateHook func(sourceID uuid.UUID)
+
 type Handlers struct {
-	store *Store
+	store      *Store
+	postCreate PostCreateHook
 }
 
 func NewHandlers(store *Store) *Handlers {
 	return &Handlers{store: store}
+}
+
+// SetPostCreateHook installs a hook called after each successful create.
+// Pass nil to clear.
+func (h *Handlers) SetPostCreateHook(hook PostCreateHook) {
+	h.postCreate = hook
 }
 
 // Register mounts source routes under /publications/:id/sources.
@@ -129,6 +142,9 @@ func (h *Handlers) create(c *gin.Context) {
 	if err != nil {
 		httpx.Error(c, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	if h.postCreate != nil {
+		h.postCreate(src.ID)
 	}
 	c.JSON(http.StatusCreated, toResp(src))
 }

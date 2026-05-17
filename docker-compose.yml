@@ -16,5 +16,53 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: ai_newsletter_redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # NSQ ports are offset (+1000) from defaults to avoid colliding with a
+  # system-wide NSQ install that may already be running on 4150/4160/4161/4171.
+  nsqlookupd:
+    image: nsqio/nsq:v1.3.0
+    container_name: ai_newsletter_nsqlookupd
+    command: /nsqlookupd
+    ports:
+      - "5160:4160"
+      - "5161:4161"
+
+  nsqd:
+    image: nsqio/nsq:v1.3.0
+    container_name: ai_newsletter_nsqd
+    # broadcast-address + broadcast-tcp-port/http-port make nsqd advertise the
+    # host-mapped ports so consumers on the host can reach it after lookupd
+    # discovery (nsqd's internal listener is on the container-side port).
+    command: >-
+      /nsqd
+      --lookupd-tcp-address=nsqlookupd:4160
+      --broadcast-address=127.0.0.1
+      --broadcast-tcp-port=5150
+      --broadcast-http-port=5151
+    depends_on:
+      - nsqlookupd
+    ports:
+      - "5150:4150"
+      - "5151:4151"
+
+  nsqadmin:
+    image: nsqio/nsq:v1.3.0
+    container_name: ai_newsletter_nsqadmin
+    command: /nsqadmin --lookupd-http-address=nsqlookupd:4161
+    depends_on:
+      - nsqlookupd
+    ports:
+      - "5171:4171"
+
 volumes:
   postgres_data:

@@ -18,6 +18,10 @@ coverage.*
 # Firebase service-account JSONs (project-id-firebase-adminsdk-*.json) — never commit
 firebase-*.json
 *-firebase-adminsdk-*.json
+# Firebase emulator runtime logs
+firebase-emulator/firebase-debug.log
+firebase-emulator/*.log
+firebase-emulator/firestore-debug.log
 
 # OS / editor
 .DS_Store

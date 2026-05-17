@@ -2,6 +2,7 @@ package cadence
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nsqio/go-nsq"
 
+	"github.com/thebitmonk/ai_newsletter/internal/curation"
 	"github.com/thebitmonk/ai_newsletter/internal/issues"
 	"github.com/thebitmonk/ai_newsletter/internal/nsqx"
 )
@@ -30,15 +32,22 @@ const LookaheadWindow = 7 * 24 * time.Hour
 // materialise per tick (safety bound against pathological rules).
 const MaxSlotsPerRunPerPublication = 200
 
+// Producer is the subset of nsqx.Producer the scheduler uses, defined here so
+// tests can substitute a fake. *nsqx.Producer satisfies it.
+type Producer interface {
+	Publish(topic string, body []byte) error
+	PublishDeferred(topic string, delay time.Duration, body []byte) error
+}
+
 // Scheduler runs the cadence-driven slot materialisation loop.
 type Scheduler struct {
 	pool     *pgxpool.Pool
-	producer *nsqx.Producer
+	producer Producer
 	issues   *issues.Store
 	clock    func() time.Time
 }
 
-func NewScheduler(pool *pgxpool.Pool, producer *nsqx.Producer, issuesStore *issues.Store) *Scheduler {
+func NewScheduler(pool *pgxpool.Pool, producer Producer, issuesStore *issues.Store) *Scheduler {
 	return &Scheduler{
 		pool:     pool,
 		producer: producer,
@@ -56,26 +65,27 @@ func (s *Scheduler) WithClock(clk func() time.Time) *Scheduler {
 // HandleTick is the NSQ message handler. It publishes the next tick first
 // (so the loop self-sustains even if work below fails) then runs scheduling.
 func (s *Scheduler) HandleTick(_ *nsq.Message) error {
-	if err := s.producer.PublishDeferred(TickTopic, TickInterval, []byte("tick")); err != nil {
-		log.Printf("cadence scheduler: enqueue next tick: %v", err)
-		// Fall through — still try to do work this tick.
+	if s.producer != nil {
+		if err := s.producer.PublishDeferred(TickTopic, TickInterval, []byte("tick")); err != nil {
+			log.Printf("cadence scheduler: enqueue next tick: %v", err)
+		}
 	}
 	if err := s.RunOnce(context.Background()); err != nil {
 		log.Printf("cadence scheduler: run: %v", err)
-		// Don't return the error: we don't want NSQ to requeue this specific
-		// tick (the next tick is already scheduled).
 	}
 	return nil
 }
 
 // RunOnce performs one scheduling pass: for every Publication with a cadence
-// rule, materialise any missing planned Issues in the lookahead window.
+// rule, materialise any missing planned Issues in the lookahead window and
+// enqueue a curation.start for each newly-created Issue at
+// scheduled_at - curation_lead_time.
 func (s *Scheduler) RunOnce(ctx context.Context) error {
 	now := s.clock()
 	until := now.Add(LookaheadWindow)
 
 	rows, err := s.pool.Query(ctx, `
-		select id, cadence_rule, timezone
+		select id, cadence_rule, timezone, curation_lead_time
 		from publications
 		where cadence_rule is not null
 	`)
@@ -85,14 +95,15 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 	defer rows.Close()
 
 	type pubRow struct {
-		id       uuid.UUID
-		rule     string
-		timezone string
+		id              uuid.UUID
+		rule            string
+		timezone        string
+		curationLeadTime time.Duration
 	}
 	var pubs []pubRow
 	for rows.Next() {
 		var p pubRow
-		if err := rows.Scan(&p.id, &p.rule, &p.timezone); err != nil {
+		if err := rows.Scan(&p.id, &p.rule, &p.timezone, &p.curationLeadTime); err != nil {
 			return fmt.Errorf("scheduler: scan publication: %w", err)
 		}
 		pubs = append(pubs, p)
@@ -114,16 +125,43 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 			continue
 		}
 		for _, slot := range slots {
-			if _, _, err := s.issues.CreatePlanned(ctx, p.id, slot); err != nil {
+			iss, created, err := s.issues.CreatePlanned(ctx, p.id, slot)
+			if err != nil {
 				log.Printf("scheduler: pub %s create planned %s: %v", p.id, slot, err)
+				continue
+			}
+			if !created {
+				continue
+			}
+			if err := s.enqueueCuration(iss.ID, slot, p.curationLeadTime, now); err != nil {
+				log.Printf("scheduler: pub %s enqueue curation for issue %s: %v",
+					p.id, iss.ID, err)
 			}
 		}
 	}
 	return nil
 }
 
+// enqueueCuration publishes curation.start to fire `lead` before scheduledAt.
+// If the firing time is already in the past, publishes immediately.
+func (s *Scheduler) enqueueCuration(issueID uuid.UUID, scheduledAt time.Time, lead time.Duration, now time.Time) error {
+	if s.producer == nil {
+		return nil
+	}
+	body, _ := json.Marshal(curation.StartMessage{IssueID: issueID.String()})
+	fireAt := scheduledAt.Add(-lead)
+	delay := fireAt.Sub(now)
+	if delay <= 0 {
+		return s.producer.Publish(curation.StartTopic, body)
+	}
+	return s.producer.PublishDeferred(curation.StartTopic, delay, body)
+}
+
 // Bootstrap publishes an initial tick so the scheduler loop starts on app
 // startup. Safe to call repeatedly — the work is idempotent.
 func (s *Scheduler) Bootstrap() error {
+	if s.producer == nil {
+		return nil
+	}
 	return s.producer.Publish(TickTopic, []byte("bootstrap"))
 }

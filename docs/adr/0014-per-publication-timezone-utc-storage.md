@@ -1,0 +1,9 @@
+# Per-Publication timezone; UTC storage; per-Contact send-time optimisation deferred
+
+Each **Publication** has an IANA `timezone` column (e.g. `America/New_York`, `Europe/London`). The **Cadence** rule is stored as wall-clock-in-TZ ("FREQ=WEEKLY;BYDAY=MO;BYHOUR=9" interpreted in the Publication's timezone). All persisted timestamps — `scheduled_at`, `sent_at`, `created_at`, `subscribed_at`, `bounced_at` — use `timestamptz` (UTC under the hood); the Publication's timezone is applied only at rrule expansion and display. There is no `naive timestamp` column anywhere in the schema.
+
+We chose per-Publication TZ over UTC-everywhere because no newsletter owner thinks in UTC — the first scheduled "Monday 9am" that goes out at 4am their time is the moment they quit. Per-Publication is the discipline that matches the brand model (a Publication has a sending identity, of which "what time does it send?" is a core part).
+
+We chose against per-Contact send-time optimisation at v1 even though it demonstrably improves open rates 10-15% in industry benchmarks. The cost is too high for v1: it turns a one-shot dispatch into a 24-hour rolling window that breaks idempotent send semantics, complicates webhook attribution (which Issue × Contact × time bucket did this bounce belong to?), forces Contact-level timezone capture (web forms rarely ask; IP geolocation is wrong ~5% of the time), and multiplies DST transition chaos across the recipient set. It's a real feature worth building in v2 as a per-Publication paid-tier toggle, layered on this same storage discipline without schema changes — the timezone work here is forwards-compatible with that.
+
+The single rule a future engineer needs to internalise: **the database stores UTC; the Publication timezone is metadata for interpretation, never storage.** Any column named `*_at_local` or `*_in_tz` is a bug — push back at code review.

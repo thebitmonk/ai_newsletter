@@ -1,0 +1,9 @@
+# Account and User are distinct entities; 1:1 enforced in code at v1, not schema
+
+The schema has three tables — `accounts`, `users`, `account_members` (join with a `role` column) — even though v1 only ever ships with one User per Account. Every owned resource (Publications, Sources, Contacts, Subscriptions, Issues, Dispatches) references `account_id`, never `user_id`. Application code at v1 enforces "exactly one membership per account" on signup and rejects any attempt to add another. The `role` column exists but only ever holds `owner` at v1.
+
+The temptation looking at this schema in a single-user product is to collapse it to `user_id` everywhere — that temptation is wrong and will be expensive to satisfy later. The target audience is solo creators today, but the realistic medium-term needs (agencies running newsletters for clients, two-person co-founder operations, ghost-writer arrangements, the first enterprise prospect, any acquisition conversation) all require multi-user. Adding multi-user to a `user_id`-everywhere schema is a migration on every owned table — doable but a real project. Adding multi-user to the schema we have here is a *code-only* change: relax the membership-count enforcement, add roles beyond `owner`, build the invite flow.
+
+We chose this over building the full multi-user system at v1 (roles, invites, audit log, per-resource permission checks) because that work is roughly a month of engineering that produces no v1 user value — solo creators don't need teammates, and the UI complexity of role-aware screens hurts the onboarding flow. The middle path here pays the schema cost once (one extra table, one indirection in queries) and defers the feature cost until there's a customer asking for it.
+
+Onboarding UX at v1 should still feel like "sign up → land in your account → start" — the User/Account distinction is invisible. The `account_members` row is created implicitly at signup; the owner never sees it.

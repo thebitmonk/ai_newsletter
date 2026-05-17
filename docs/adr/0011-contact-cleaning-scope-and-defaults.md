@@ -1,0 +1,11 @@
+# Contact cleaning: defined scope, default-on basics, per-Publication policy levers
+
+"Cleaning" a **Contact** means a defined set of operations that maintain Contact data integrity and deliverability — it is distinct from **Enrichment** (adding data from external sources). Conflating the two is a categorical mistake that produces confused settings UX.
+
+The always-on set runs by default on every account: write-time format normalisation (lowercase email, trim whitespace), syntactic validation, dedup-by-email enforcement (one Contact per lowercase email per account), MX-record check on the email's domain, asynchronous hard-bounce-driven Suppression, and complaint-driven Suppression. These are free or near-free, obviously correct, and skipping any of them is a bug rather than a feature. Per [ADR-0009](./0009-account-contacts-with-publication-subscriptions.md), Suppression is account-global and blocks sends across all the Contact's Subscriptions.
+
+Two cleanup levers are per-**Publication** policy, default off: engagement-driven cleanup (no opens in N days → Suppress or mark dormant) and role-account filtering (block `info@`, `sales@`, `noreply@` patterns). Defaults are off because different Publications have legitimately different needs — a daily Publication may need aggressive engagement cleanup, while a once-a-quarter Publication might wrongly purge live readers; a B2B Publication may legitimately want to keep `partnerships@` addresses while a consumer Publication never would. Owner choice, not platform default.
+
+Active SMTP mailbox probing (per-address deliverability check before send) is deferred to v2 as a third-party integration (NeverBounce, ZeroBounce, Kickbox). Bounce-driven Suppression gives the same outcome retroactively with no risk of getting our sending IPs flagged by aggressive probing, and the demand for proactive probing only meaningfully appears with large cold-import workflows we won't have at launch.
+
+Enrichment (filling missing names, companies, enrichment metadata from Apollo or Clearbit) is intentionally not part of cleaning — it adds data rather than maintaining it, runs on a different cadence, has different cost characteristics, and its failures have different consequences. Keeping the concepts split keeps the settings UX honest and the audit logs interpretable.

@@ -1,0 +1,9 @@
+# Issue body is a ProseMirror doc; operational metadata is structured columns
+
+An **Issue** is persisted as a hybrid: structured columns for everything we query or index (`subject`, `status`, `scheduled_at`, `sent_at`, `cover_url`, `publication_id`) plus a single `body_doc` JSON column holding the full ProseMirror/Tiptap document for the body. The intro, all **Stories**, the sponsor block, and the footer all live as nodes inside that one document.
+
+The reasonable instinct is "Stories are a list, give them their own table." We chose against that because Tiptap is the editor and round-tripping a rich document through normalised rows is a constant tax — every new mark, every new node type would force a bidirectional parser update, and we'd be permanently fighting the editor's data model. Owners will also want blocks we haven't anticipated (callouts, pull-quotes, embedded tweets, polls, dividers); a fixed schema turns each of those into a feature ticket, while a doc absorbs them for free. The other instinct — "store the whole Issue as one blob" — fails the operational side: the calendar view, scheduling worker, and analytics all need to query `status` and `scheduled_at` thousands of times a day, which is intolerable through JSON parsing.
+
+Targeted regeneration still works because schema-defined nodes (`story`, `cover`, `intro`, `sponsor`, `footer`) carry stable `data-*` attributes. "Regenerate Story X" finds the node by `data-story-id` and replaces its inner content; the rest of the doc is untouched.
+
+Two synchronisation rules a future reader needs to know: (1) `cover_url` lives in both the column (for inbox previews, calendar thumbnails, deliverability checks) and the doc's cover node — the column is primary, the doc reads from it. (2) The doc schema is versioned alongside Tiptap; migrators read `body_doc.version` and upgrade on read if needed, never silently rewriting data on save.

@@ -1,0 +1,27 @@
+# Binaries
+/ai_newsletter
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Build / tmp
+/bin/
+/dist/
+/tmp/

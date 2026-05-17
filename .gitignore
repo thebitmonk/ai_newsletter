@@ -15,6 +15,9 @@ coverage.*
 .env
 .env.*
 !.env.example
+# Firebase service-account JSONs (project-id-firebase-adminsdk-*.json) — never commit
+firebase-*.json
+*-firebase-adminsdk-*.json
 
 # OS / editor
 .DS_Store

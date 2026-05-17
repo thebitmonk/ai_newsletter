@@ -20,10 +20,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/thebitmonk/ai_newsletter/internal/firebaseauth"
 	"github.com/thebitmonk/ai_newsletter/internal/server"
 )
 
-var testPool *pgxpool.Pool
+var (
+	testPool     *pgxpool.Pool
+	testVerifier *firebaseauth.FakeVerifier
+)
 
 func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
@@ -47,6 +51,7 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	testPool = pool
+	testVerifier = firebaseauth.NewFakeVerifier()
 
 	if err := migrateUp(dbURL); err != nil {
 		fmt.Fprintf(os.Stderr, "migrate up: %v\n", err)
@@ -78,23 +83,45 @@ func migrateUp(dbURL string) error {
 func truncate(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`truncate candidates, issues, sources, publications, sessions, account_members, users, accounts cascade`)
+		`truncate candidates, issues, sources, publications, account_members, users, accounts cascade`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }
 
-// signupAs is a test helper: creates a new account+user, returns the token.
+// newServer builds a server.Engine wired with the shared FakeVerifier so
+// tokens minted by signupAs are accepted. Forwards any extra options the
+// caller wants (e.g. WithCurateTrigger).
+func newServer(t *testing.T, opts ...server.Option) *gin.Engine {
+	t.Helper()
+	opts = append(opts, server.WithTokenVerifier(testVerifier))
+	return server.New(testPool, opts...)
+}
+
+// signupAs is a test helper: mints a synthetic Firebase ID token + UID,
+// registers them in the FakeVerifier, then calls /whoami on the supplied
+// router to trigger the user/account upsert. Returns (token, accountID).
+//
+// Each call produces a fresh UID so concurrent tests don't collide.
 func signupAs(t *testing.T, r http.Handler, email string) (token, accountID string) {
 	t.Helper()
-	_, body := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": email, "password": "supersecret"}, "")
-	tok, _ := body["token"].(string)
-	acc, _ := body["account_id"].(string)
-	if tok == "" || acc == "" {
-		t.Fatalf("signupAs %s failed: %v", email, body)
+	uid := "test-uid-" + uuid.NewString()
+	token = "test-token-" + uuid.NewString()
+	testVerifier.Register(token, &firebaseauth.Claims{
+		UID:            uid,
+		Email:          email,
+		EmailVerified:  true,
+		SignInProvider: "password",
+	})
+	w, body := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("signupAs %s upsert failed (%d): %v", email, w.Code, body)
 	}
-	return tok, acc
+	acc, _ := body["account_id"].(string)
+	if acc == "" {
+		t.Fatalf("signupAs %s: no account_id in /whoami response: %v", email, body)
+	}
+	return token, acc
 }
 
 func parseUUID(t *testing.T, s string) uuid.UUID {
@@ -136,7 +163,7 @@ func doJSON(t *testing.T, r http.Handler, method, path string, body any, bearer 
 // -----------------------------------------------------------------------------
 
 func TestHealthz_OK(t *testing.T) {
-	r := server.New(testPool)
+	r := newServer(t)
 	w, body := doJSON(t, r, http.MethodGet, "/healthz", nil, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
@@ -147,105 +174,76 @@ func TestHealthz_OK(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// signup / login
+// Firebase auth → user/account upsert (replaces the old local signup/login tests)
 // -----------------------------------------------------------------------------
 
-func TestSignup_HappyPath_CreatesAtomically(t *testing.T) {
+func TestFirstAuth_CreatesUserAccountMembershipAtomically(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 
-	w, body := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "alice@example.com", "password": "supersecret"}, "")
+	signupAs(t, r, "alice@example.com")
 
-	if w.Code != http.StatusCreated {
-		t.Fatalf("want 201, got %d: %v", w.Code, body)
-	}
-	if body["token"] == nil || body["user_id"] == nil || body["account_id"] == nil {
-		t.Fatalf("missing fields: %v", body)
-	}
-
-	// Verify all three rows exist
 	var users, accounts, members int
 	_ = testPool.QueryRow(context.Background(), `select count(*) from users`).Scan(&users)
 	_ = testPool.QueryRow(context.Background(), `select count(*) from accounts`).Scan(&accounts)
 	_ = testPool.QueryRow(context.Background(), `select count(*) from account_members`).Scan(&members)
 	if users != 1 || accounts != 1 || members != 1 {
-		t.Fatalf("expected 1 of each, got users=%d accounts=%d members=%d", users, accounts, members)
+		t.Fatalf("expected 1 of each, got users=%d accounts=%d members=%d",
+			users, accounts, members)
 	}
 }
 
-func TestSignup_DuplicateEmail_RollsBackAccount(t *testing.T) {
+func TestSecondAuth_SameUID_IsIdempotent(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 
-	_, _ = doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "bob@example.com", "password": "supersecret"}, "")
+	// Register one synthetic token, hit /whoami twice — the user/account
+	// rows should be created only once.
+	token := "test-token-" + uuid.NewString()
+	uid := "test-uid-" + uuid.NewString()
+	testVerifier.Register(token, &firebaseauth.Claims{
+		UID: uid, Email: "alice@example.com", EmailVerified: true,
+	})
 
-	w, body := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "BOB@example.com", "password": "supersecret"}, "")
-
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d", w.Code)
+	for i := range 3 {
+		w, _ := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, token)
+		if w.Code != http.StatusOK {
+			t.Fatalf("call %d: want 200, got %d", i, w.Code)
+		}
 	}
-	errBody, _ := body["error"].(map[string]any)
-	if errBody["code"] != "email_taken" {
-		t.Fatalf("want email_taken, got %v", errBody)
-	}
 
-	// Should still be exactly one account (the failed signup's tx rolled back)
-	var accounts int
+	var users, accounts int
+	_ = testPool.QueryRow(context.Background(), `select count(*) from users`).Scan(&users)
 	_ = testPool.QueryRow(context.Background(), `select count(*) from accounts`).Scan(&accounts)
-	if accounts != 1 {
-		t.Fatalf("want 1 account after failed dup, got %d", accounts)
+	if users != 1 || accounts != 1 {
+		t.Fatalf("expected upsert to be idempotent — got users=%d accounts=%d", users, accounts)
 	}
 }
 
-func TestSignup_PasswordTooShort(t *testing.T) {
+func TestAuth_EmailUpdatedFromClaims(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
-	w, _ := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "x@y.com", "password": "short"}, "")
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
+	r := newServer(t)
 
-func TestLogin_HappyPath(t *testing.T) {
-	truncate(t)
-	r := server.New(testPool)
-	_, _ = doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "carol@example.com", "password": "supersecret"}, "")
+	token := "test-token-" + uuid.NewString()
+	uid := "test-uid-" + uuid.NewString()
+	testVerifier.Register(token, &firebaseauth.Claims{
+		UID: uid, Email: "old@example.com", EmailVerified: false,
+	})
+	_, _ = doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, token)
 
-	w, body := doJSON(t, r, http.MethodPost, "/api/v1/auth/login",
-		map[string]string{"email": "carol@example.com", "password": "supersecret"}, "")
+	// Same UID, new email + verified.
+	testVerifier.Register(token, &firebaseauth.Claims{
+		UID: uid, Email: "new@example.com", EmailVerified: true,
+	})
+	w, body := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, token)
 	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %v", w.Code, body)
+		t.Fatalf("want 200, got %d", w.Code)
 	}
-	if body["token"] == nil {
-		t.Fatalf("no token in response: %v", body)
+	if body["email"] != "new@example.com" {
+		t.Errorf("email not refreshed from claims: %v", body["email"])
 	}
-}
-
-func TestLogin_WrongPassword(t *testing.T) {
-	truncate(t)
-	r := server.New(testPool)
-	_, _ = doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "dave@example.com", "password": "supersecret"}, "")
-
-	w, body := doJSON(t, r, http.MethodPost, "/api/v1/auth/login",
-		map[string]string{"email": "dave@example.com", "password": "wrong-one"}, "")
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401, got %d: %v", w.Code, body)
-	}
-}
-
-func TestLogin_UnknownEmail(t *testing.T) {
-	truncate(t)
-	r := server.New(testPool)
-	w, _ := doJSON(t, r, http.MethodPost, "/api/v1/auth/login",
-		map[string]string{"email": "ghost@example.com", "password": "supersecret"}, "")
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401, got %d", w.Code)
+	if body["email_verified"] != true {
+		t.Errorf("email_verified not refreshed from claims: %v", body["email_verified"])
 	}
 }
 
@@ -254,7 +252,7 @@ func TestLogin_UnknownEmail(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestBearer_MissingToken(t *testing.T) {
-	r := server.New(testPool)
+	r := newServer(t)
 	w, body := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, "")
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d: %v", w.Code, body)
@@ -262,7 +260,7 @@ func TestBearer_MissingToken(t *testing.T) {
 }
 
 func TestBearer_MalformedHeader(t *testing.T) {
-	r := server.New(testPool)
+	r := newServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/whoami", nil)
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 	w := httptest.NewRecorder()
@@ -273,69 +271,61 @@ func TestBearer_MalformedHeader(t *testing.T) {
 }
 
 func TestBearer_BogusToken(t *testing.T) {
-	r := server.New(testPool)
+	r := newServer(t)
 	w, _ := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, "not-a-real-token-at-all")
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", w.Code)
 	}
 }
 
-func TestBearer_ExpiredToken(t *testing.T) {
+func TestBearer_RevokedToken_Rejected(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
-	_, body := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "eve@example.com", "password": "supersecret"}, "")
-	token := body["token"].(string)
+	r := newServer(t)
+	tokenA, _ := signupAs(t, r, "eve@example.com")
 
-	// Manually expire the session.
-	_, err := testPool.Exec(context.Background(),
-		`update sessions set expires_at = now() - interval '1 hour'`)
-	if err != nil {
-		t.Fatalf("expire: %v", err)
-	}
+	// Simulate revocation by forgetting the token on the verifier side
+	// (e.g. user deleted their account on the Firebase side).
+	testVerifier.Forget(tokenA)
 
-	w, _ := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, token)
+	w, _ := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, tokenA)
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401 after expiry, got %d", w.Code)
+		t.Fatalf("want 401 after revocation, got %d", w.Code)
 	}
 }
 
 func TestWhoami_ReturnsCorrectIdentity(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
-	_, signup := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "frank@example.com", "password": "supersecret"}, "")
-	token := signup["token"].(string)
+	r := newServer(t)
+	token, accountID := signupAs(t, r, "frank@example.com")
 
 	w, body := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, token)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %v", w.Code, body)
 	}
-	if body["user_id"] != signup["user_id"] {
-		t.Fatalf("user_id mismatch: %v vs %v", body["user_id"], signup["user_id"])
+	if body["account_id"] != accountID {
+		t.Fatalf("account_id mismatch: %v vs %v", body["account_id"], accountID)
 	}
-	if body["account_id"] != signup["account_id"] {
-		t.Fatalf("account_id mismatch: %v vs %v", body["account_id"], signup["account_id"])
+	if body["email"] != "frank@example.com" {
+		t.Fatalf("email mismatch: %v", body["email"])
 	}
 }
 
 func TestCrossAccount_IsolatedSessions(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
-	_, a := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "a@example.com", "password": "supersecret"}, "")
-	_, b := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
-		map[string]string{"email": "b@example.com", "password": "supersecret"}, "")
+	r := newServer(t)
+	tokenA, accountA := signupAs(t, r, "a@example.com")
+	tokenB, accountB := signupAs(t, r, "b@example.com")
 
-	if a["account_id"] == b["account_id"] {
+	if accountA == accountB {
 		t.Fatalf("two signups produced the same account_id")
 	}
 
-	w, body := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, b["token"].(string))
+	w, body := doJSON(t, r, http.MethodGet, "/api/v1/whoami", nil, tokenB)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
-	if body["account_id"] != b["account_id"] {
-		t.Fatalf("whoami leaked across accounts: got %v want %v", body["account_id"], b["account_id"])
+	if body["account_id"] != accountB {
+		t.Fatalf("whoami leaked across accounts: got %v want %v", body["account_id"], accountB)
 	}
+	_ = tokenA // suppress unused — useful for inspection during debugging
 }

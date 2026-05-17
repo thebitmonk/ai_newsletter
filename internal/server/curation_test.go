@@ -132,7 +132,7 @@ func seedPlanned(t *testing.T, pubID uuid.UUID, scheduledAt time.Time) uuid.UUID
 
 func TestCuration_HappyPath_PlannedToDrafted(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "cur-happy@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "BRIEF: tech for engineers", 1, 5)
 	srcID := makeSrc(t, r, token, pubID, "rss", "https://example.com/feed")
@@ -178,7 +178,7 @@ func TestCuration_HappyPath_PlannedToDrafted(t *testing.T) {
 
 func TestCuration_ZeroCandidates_Skipped(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "cur-zero@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	_ = makeSrc(t, r, token, pubID, "rss", "https://example.com/feed")
@@ -203,7 +203,7 @@ func TestCuration_ZeroCandidates_Skipped(t *testing.T) {
 
 func TestCuration_RankerError_Failed(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "cur-fail@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	srcID := makeSrc(t, r, token, pubID, "rss", "https://example.com/feed")
@@ -234,7 +234,7 @@ func TestCuration_RankerError_Failed(t *testing.T) {
 
 func TestCuration_NotPlanned_NoOp(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "cur-noop@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	pubUUID := parseUUID(t, pubID)
@@ -269,7 +269,7 @@ func TestCurateEndpoint_HappyPath(t *testing.T) {
 	truncate(t)
 	var calledWith uuid.UUID
 	trig := func(id uuid.UUID) error { calledWith = id; return nil }
-	r := server.New(testPool, server.WithCurateTrigger(trig))
+	r := newServer(t, server.WithCurateTrigger(trig))
 
 	token, _ := signupAs(t, r, "trig-happy@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
@@ -288,7 +288,7 @@ func TestCurateEndpoint_HappyPath(t *testing.T) {
 
 func TestCurateEndpoint_CrossAccount_404(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool, server.WithCurateTrigger(func(uuid.UUID) error { return nil }))
+	r := newServer(t, server.WithCurateTrigger(func(uuid.UUID) error { return nil }))
 	tokenA, _ := signupAs(t, r, "trig-a@example.com")
 	tokenB, _ := signupAs(t, r, "trig-b@example.com")
 	pubA := makePubWithBrief(t, r, tokenA, "A", "brief", 1, 5)
@@ -303,7 +303,7 @@ func TestCurateEndpoint_CrossAccount_404(t *testing.T) {
 
 func TestCurateEndpoint_WrongState_409(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool, server.WithCurateTrigger(func(uuid.UUID) error { return nil }))
+	r := newServer(t, server.WithCurateTrigger(func(uuid.UUID) error { return nil }))
 	token, _ := signupAs(t, r, "trig-state@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	pubUUID := parseUUID(t, pubID)
@@ -321,7 +321,7 @@ func TestCurateEndpoint_WrongState_409(t *testing.T) {
 
 func TestCurateEndpoint_NoWorkerConfigured_503(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool) // no trigger
+	r := newServer(t) // no trigger
 	token, _ := signupAs(t, r, "trig-503@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	issueID := seedPlanned(t, parseUUID(t, pubID), time.Now().Add(time.Hour))

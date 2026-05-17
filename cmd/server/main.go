@@ -16,6 +16,7 @@ import (
 	"github.com/thebitmonk/ai_newsletter/internal/candidates"
 	"github.com/thebitmonk/ai_newsletter/internal/curation"
 	"github.com/thebitmonk/ai_newsletter/internal/db"
+	"github.com/thebitmonk/ai_newsletter/internal/firebaseauth"
 	"github.com/thebitmonk/ai_newsletter/internal/imagegen"
 	"github.com/thebitmonk/ai_newsletter/internal/issues"
 	"github.com/thebitmonk/ai_newsletter/internal/llmclient"
@@ -40,8 +41,14 @@ func main() {
 	}
 	defer pool.Close()
 
+	verifier, err := firebaseauth.NewFromEnv(ctx)
+	if err != nil {
+		log.Fatalf("firebaseauth: %v", err)
+	}
+
 	serverOpts, stopWorkers := maybeStartWorkers(ctx, pool)
 	defer stopWorkers()
+	serverOpts = append(serverOpts, server.WithTokenVerifier(verifier))
 
 	addr := os.Getenv("ADDR")
 	if addr == "" {

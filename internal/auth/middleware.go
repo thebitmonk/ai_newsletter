@@ -1,3 +1,7 @@
+// Package auth provides the HTTP middleware that turns a Firebase ID token
+// (Authorization: Bearer <token>) into a request-scoped Session with userID +
+// accountID. Per ADR-0016 the verification is delegated to firebaseauth; the
+// upsert to firebaseauth.Claims → (User, Account) is delegated to users.
 package auth
 
 import (
@@ -8,17 +12,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/thebitmonk/ai_newsletter/internal/firebaseauth"
 	"github.com/thebitmonk/ai_newsletter/internal/httpx"
+	"github.com/thebitmonk/ai_newsletter/internal/users"
 )
 
-const (
-	ctxSessionKey = "auth.session"
-)
+const ctxSessionKey = "auth.session"
 
-// Bearer validates the Authorization: Bearer <token> header against the
-// session store and stashes the resolved Session in the request context.
-// Requests with missing/malformed/expired tokens are rejected with 401.
-func Bearer(sessions *SessionStore) gin.HandlerFunc {
+// Session is the per-request authentication context downstream handlers read
+// via UserID / AccountID accessors.
+type Session struct {
+	UserID    uuid.UUID
+	AccountID uuid.UUID
+	Claims    *firebaseauth.Claims
+}
+
+// Bearer validates Authorization: Bearer <firebase-id-token>, upserts the
+// User + Account (first request from a new UID atomically creates both per
+// ADR-0013 / ADR-0016), and stashes the Session in the request context.
+func Bearer(verifier firebaseauth.TokenVerifier, store *users.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" {
@@ -36,24 +48,33 @@ func Bearer(sessions *SessionStore) gin.HandlerFunc {
 			return
 		}
 
-		sess, err := sessions.Lookup(c.Request.Context(), raw)
+		claims, err := verifier.Verify(c.Request.Context(), raw)
 		if err != nil {
-			if errors.Is(err, ErrSessionNotFound) {
-				httpx.Error(c, http.StatusUnauthorized, "invalid_token", "session not found or expired")
+			if errors.Is(err, firebaseauth.ErrInvalidToken) {
+				httpx.Error(c, http.StatusUnauthorized, "invalid_token", "id token is invalid or expired")
 				return
 			}
-			httpx.Error(c, http.StatusInternalServerError, "internal", "session lookup failed")
+			httpx.Error(c, http.StatusInternalServerError, "internal", "token verification failed")
 			return
 		}
 
-		c.Set(ctxSessionKey, sess)
+		userID, accountID, err := store.GetOrCreateByFirebaseUID(c.Request.Context(), claims)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, "internal", "user upsert failed")
+			return
+		}
+
+		c.Set(ctxSessionKey, &Session{
+			UserID:    userID,
+			AccountID: accountID,
+			Claims:    claims,
+		})
 		c.Next()
 	}
 }
 
 // RequireAccountScope refuses requests that lack a Session in context (i.e.
-// the Bearer middleware did not run or did not set one). Handlers can then
-// read AccountID(c) / UserID(c) safely.
+// Bearer did not run or did not set one).
 func RequireAccountScope() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if _, ok := c.Get(ctxSessionKey); !ok {
@@ -65,16 +86,14 @@ func RequireAccountScope() gin.HandlerFunc {
 }
 
 // AccountID returns the authenticated account ID for the current request.
-// Panics if no Session is set — callers must be behind Bearer + RequireAccountScope.
-func AccountID(c *gin.Context) uuid.UUID {
-	return sessionFrom(c).AccountID
-}
+func AccountID(c *gin.Context) uuid.UUID { return sessionFrom(c).AccountID }
 
 // UserID returns the authenticated user ID for the current request.
-// Panics if no Session is set — callers must be behind Bearer + RequireAccountScope.
-func UserID(c *gin.Context) uuid.UUID {
-	return sessionFrom(c).UserID
-}
+func UserID(c *gin.Context) uuid.UUID { return sessionFrom(c).UserID }
+
+// CurrentClaims exposes the verified Firebase claims for handlers that need
+// e.g. the user's email for display.
+func CurrentClaims(c *gin.Context) *firebaseauth.Claims { return sessionFrom(c).Claims }
 
 func sessionFrom(c *gin.Context) *Session {
 	v, ok := c.Get(ctxSessionKey)

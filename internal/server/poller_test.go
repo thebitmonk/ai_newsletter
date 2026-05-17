@@ -13,7 +13,6 @@ import (
 
 	"github.com/thebitmonk/ai_newsletter/internal/candidates"
 	"github.com/thebitmonk/ai_newsletter/internal/nsqx"
-	"github.com/thebitmonk/ai_newsletter/internal/server"
 	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter"
 	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter/rss"
 	"github.com/thebitmonk/ai_newsletter/internal/sources"
@@ -64,7 +63,7 @@ const candidateFeedRSS = `<?xml version="1.0" encoding="UTF-8"?>
 
 func TestCandidateStore_Upsert_Dedups(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "cand-dedup@example.com")
 
 	pubID := makePub(t, r, token, "P")
@@ -107,7 +106,7 @@ func TestCandidateStore_Upsert_Dedups(t *testing.T) {
 
 func TestCandidateStore_ListActive_FiltersExpired(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "cand-list@example.com")
 
 	pubID := makePub(t, r, token, "P")
@@ -140,7 +139,7 @@ func TestCandidateStore_ListActive_FiltersExpired(t *testing.T) {
 
 func TestCandidateStore_ExpireOlderThan_Deletes(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "cand-expire@example.com")
 
 	pubID := makePub(t, r, token, "P")
@@ -180,7 +179,7 @@ func TestCandidateStore_ExpireOlderThan_Deletes(t *testing.T) {
 
 func TestPoller_PollOnce_FetchesAndPersistsCandidates(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "poller-fetch@example.com")
 
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -232,7 +231,7 @@ func TestPoller_PollOnce_FetchesAndPersistsCandidates(t *testing.T) {
 
 func TestPoller_PollOnce_DisabledSource_NoOp(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "poller-disabled@example.com")
 
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -278,7 +277,7 @@ func TestPoller_PollOnce_GoneSource_NoOp(t *testing.T) {
 
 func TestSupervisor_BootstrapsOverdueSources(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "supervisor@example.com")
 
 	pubID := makePub(t, r, token, "P")

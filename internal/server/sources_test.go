@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/thebitmonk/ai_newsletter/internal/server"
 )
 
 // makePub is a test helper that creates a publication and returns its id.
@@ -22,7 +21,7 @@ func makePub(t *testing.T, r http.Handler, token, name string) string {
 
 func TestSources_Create_HappyPath(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-create@example.com")
 	pubID := makePub(t, r, token, "P")
 
@@ -44,7 +43,7 @@ func TestSources_Create_HappyPath(t *testing.T) {
 
 func TestSources_Create_DefaultIntervalsPerType(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-defaults@example.com")
 	pubID := makePub(t, r, token, "P")
 
@@ -73,7 +72,7 @@ func TestSources_Create_DefaultIntervalsPerType(t *testing.T) {
 
 func TestSources_Create_NormalisesXHandle(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-x@example.com")
 	pubID := makePub(t, r, token, "P")
 
@@ -91,7 +90,7 @@ func TestSources_Create_NormalisesXHandle(t *testing.T) {
 
 func TestSources_Create_BadType(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-bt@example.com")
 	pubID := makePub(t, r, token, "P")
 
@@ -106,7 +105,7 @@ func TestSources_Create_BadType(t *testing.T) {
 
 func TestSources_Create_BadIdentifierPerType(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-bi@example.com")
 	pubID := makePub(t, r, token, "P")
 
@@ -131,7 +130,7 @@ func TestSources_Create_BadIdentifierPerType(t *testing.T) {
 
 func TestSources_Create_DuplicateConflict(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-dup@example.com")
 	pubID := makePub(t, r, token, "P")
 
@@ -151,7 +150,7 @@ func TestSources_Create_DuplicateConflict(t *testing.T) {
 
 func TestSources_Create_CrossAccount_PubNotFound(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	tokenA, _ := signupAs(t, r, "sa@example.com")
 	tokenB, _ := signupAs(t, r, "sb@example.com")
 	pubA := makePub(t, r, tokenA, "A pub")
@@ -167,7 +166,7 @@ func TestSources_Create_CrossAccount_PubNotFound(t *testing.T) {
 
 func TestSources_List_ScopedToPublication(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-list@example.com")
 	pub1 := makePub(t, r, token, "P1")
 	pub2 := makePub(t, r, token, "P2")
@@ -194,7 +193,7 @@ func TestSources_List_ScopedToPublication(t *testing.T) {
 
 func TestSources_Update_HappyAndCrossAccount(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-upd@example.com")
 	other, _ := signupAs(t, r, "src-upd-other@example.com")
 	pubID := makePub(t, r, token, "P")
@@ -229,7 +228,7 @@ func TestSources_Update_HappyAndCrossAccount(t *testing.T) {
 
 func TestSources_Delete(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "src-del@example.com")
 	pubID := makePub(t, r, token, "P")
 

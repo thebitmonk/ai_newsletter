@@ -64,5 +64,20 @@ services:
     ports:
       - "5171:4171"
 
+  firebase-emulator:
+    # Community-maintained firebase-tools image. The auth emulator is enough
+    # for backend + frontend dev/CI without needing a real Firebase project.
+    image: andreysenov/firebase-tools:latest
+    container_name: ai_newsletter_firebase_emulator
+    working_dir: /firebase
+    command: >-
+      firebase emulators:start
+      --only auth
+      --project ai-newsletter-dev
+    volumes:
+      - ./firebase-emulator:/firebase
+    ports:
+      - "9099:9099"
+
 volumes:
   postgres_data:

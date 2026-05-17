@@ -10,7 +10,6 @@ import (
 	"github.com/thebitmonk/ai_newsletter/internal/cadence"
 	"github.com/thebitmonk/ai_newsletter/internal/curation"
 	"github.com/thebitmonk/ai_newsletter/internal/issues"
-	"github.com/thebitmonk/ai_newsletter/internal/server"
 )
 
 // fakeProducer captures publishes for assertions.
@@ -44,7 +43,7 @@ func (f *fakeProducer) PublishDeferred(topic string, delay time.Duration, body [
 // only NSQ touchpoint and is independent of slot materialisation.
 func TestScheduler_RunOnce_MaterialisesPlannedIssues(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "sched-mat@example.com")
 
 	// Publication with weekly Mon 09:00 ET cadence.
@@ -87,7 +86,7 @@ func TestScheduler_RunOnce_MaterialisesPlannedIssues(t *testing.T) {
 
 func TestScheduler_RunOnce_Idempotent(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "sched-idem@example.com")
 
 	_, body := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -119,7 +118,7 @@ func TestScheduler_RunOnce_Idempotent(t *testing.T) {
 
 func TestScheduler_RunOnce_EnqueuesCurationAtLeadTime(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "sched-enqueue@example.com")
 
 	// Daily cadence, 24h curation lead time (default).
@@ -176,7 +175,7 @@ func TestScheduler_RunOnce_EnqueuesCurationAtLeadTime(t *testing.T) {
 
 func TestScheduler_RunOnce_DoesNotReenqueueExistingIssues(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "sched-noreq@example.com")
 
 	_, body := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -218,7 +217,7 @@ func TestScheduler_RunOnce_DoesNotReenqueueExistingIssues(t *testing.T) {
 
 func TestScheduler_RunOnce_NoCadenceRule_NoOp(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "sched-noop@example.com")
 
 	// Publication with no cadence_rule.

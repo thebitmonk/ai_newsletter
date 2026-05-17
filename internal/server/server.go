@@ -10,15 +10,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/thebitmonk/ai_newsletter/internal/auth"
+	"github.com/thebitmonk/ai_newsletter/internal/firebaseauth"
 	"github.com/thebitmonk/ai_newsletter/internal/issues"
 	"github.com/thebitmonk/ai_newsletter/internal/issuesapi"
 	"github.com/thebitmonk/ai_newsletter/internal/publications"
 	"github.com/thebitmonk/ai_newsletter/internal/sources"
+	"github.com/thebitmonk/ai_newsletter/internal/users"
 )
 
 type config struct {
 	sourcePostCreate sources.PostCreateHook
 	curateTriggerFn  func(uuid.UUID) error
+	verifier         firebaseauth.TokenVerifier
 }
 
 // Option mutates the server config.
@@ -37,15 +40,25 @@ func WithCurateTrigger(fn func(uuid.UUID) error) Option {
 	return func(c *config) { c.curateTriggerFn = fn }
 }
 
+// WithTokenVerifier wires the Firebase ID-token verifier the Bearer middleware
+// uses. Required. Tests pass a *firebaseauth.FakeVerifier; production wires
+// firebaseauth.NewFromEnv.
+func WithTokenVerifier(v firebaseauth.TokenVerifier) Option {
+	return func(c *config) { c.verifier = v }
+}
+
 // New returns a fully-wired Gin engine. The caller owns the pool's lifecycle.
+// A TokenVerifier must be supplied via WithTokenVerifier — New panics if not.
 func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
 	cfg := &config{}
 	for _, o := range opts {
 		o(cfg)
 	}
+	if cfg.verifier == nil {
+		panic("server.New: WithTokenVerifier is required")
+	}
 
-	sessions := auth.NewSessionStore(pool)
-	authHandlers := auth.NewHandlers(pool, sessions)
+	userStore := users.NewStore(pool)
 	pubHandlers := publications.NewHandlers(publications.NewStore(pool))
 	srcHandlers := sources.NewHandlers(sources.NewStore(pool))
 	if cfg.sourcePostCreate != nil {
@@ -59,13 +72,15 @@ func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
 	r.GET("/healthz", healthz(pool))
 
 	v1 := r.Group("/api/v1")
-	authHandlers.Register(v1)
 
-	authed := v1.Group("/", auth.Bearer(sessions), auth.RequireAccountScope())
+	authed := v1.Group("/", auth.Bearer(cfg.verifier, userStore), auth.RequireAccountScope())
 	authed.GET("/whoami", func(c *gin.Context) {
+		claims := auth.CurrentClaims(c)
 		c.JSON(http.StatusOK, gin.H{
-			"user_id":    auth.UserID(c),
-			"account_id": auth.AccountID(c),
+			"user_id":        auth.UserID(c),
+			"account_id":     auth.AccountID(c),
+			"email":          claims.Email,
+			"email_verified": claims.EmailVerified,
 		})
 	})
 	pubHandlers.Register(authed)

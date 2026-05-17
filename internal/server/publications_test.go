@@ -4,12 +4,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/thebitmonk/ai_newsletter/internal/server"
 )
 
 func TestPublications_Create_HappyPath(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, accountID := signupAs(t, r, "pub-create@example.com")
 
 	w, body := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -38,7 +37,7 @@ func TestPublications_Create_HappyPath(t *testing.T) {
 
 func TestPublications_Create_BadTimezone(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-tz@example.com")
 
 	w, body := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -55,7 +54,7 @@ func TestPublications_Create_BadTimezone(t *testing.T) {
 
 func TestPublications_Create_BadRRULE(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-rrule@example.com")
 
 	w, _ := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -70,7 +69,7 @@ func TestPublications_Create_BadRRULE(t *testing.T) {
 
 func TestPublications_Create_BadDuration(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-dur@example.com")
 
 	w, _ := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -85,7 +84,7 @@ func TestPublications_Create_BadDuration(t *testing.T) {
 
 func TestPublications_Get_Found(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-get@example.com")
 
 	_, created := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -104,7 +103,7 @@ func TestPublications_Get_Found(t *testing.T) {
 
 func TestPublications_Get_NotFound(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-404@example.com")
 	w, _ := doJSON(t, r, http.MethodGet,
 		"/api/v1/publications/00000000-0000-0000-0000-000000000000", nil, token)
@@ -115,7 +114,7 @@ func TestPublications_Get_NotFound(t *testing.T) {
 
 func TestPublications_Get_CrossAccount_404(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	tokenA, _ := signupAs(t, r, "a@example.com")
 	tokenB, _ := signupAs(t, r, "b@example.com")
 
@@ -132,7 +131,7 @@ func TestPublications_Get_CrossAccount_404(t *testing.T) {
 
 func TestPublications_Update_HappyPath(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-upd@example.com")
 
 	_, created := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -155,7 +154,7 @@ func TestPublications_Update_HappyPath(t *testing.T) {
 
 func TestPublications_Update_UnsetCadenceRule(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-unset@example.com")
 
 	rule := "FREQ=WEEKLY;BYDAY=MO"
@@ -177,7 +176,7 @@ func TestPublications_Update_UnsetCadenceRule(t *testing.T) {
 
 func TestPublications_Update_CrossAccount_404(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	tokenA, _ := signupAs(t, r, "uupd-a@example.com")
 	tokenB, _ := signupAs(t, r, "uupd-b@example.com")
 
@@ -195,7 +194,7 @@ func TestPublications_Update_CrossAccount_404(t *testing.T) {
 
 func TestPublications_Delete(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "pub-del@example.com")
 
 	_, created := doJSON(t, r, http.MethodPost, "/api/v1/publications", map[string]any{
@@ -217,7 +216,7 @@ func TestPublications_Delete(t *testing.T) {
 
 func TestPublications_List_PaginationAndAccountScope(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	tokenA, _ := signupAs(t, r, "list-a@example.com")
 	tokenB, _ := signupAs(t, r, "list-b@example.com")
 

@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/thebitmonk/ai_newsletter/internal/issues"
-	"github.com/thebitmonk/ai_newsletter/internal/server"
 )
 
 // markDrafted is a test helper that pushes an Issue from planned to drafted
@@ -46,7 +45,7 @@ func markDrafted(t *testing.T, id uuid.UUID, subject string) {
 
 func TestIssueGet_HappyPath(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "iget@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	pubUUID := parseUUID(t, pubID)
@@ -72,7 +71,7 @@ func TestIssueGet_HappyPath(t *testing.T) {
 
 func TestIssueGet_CrossAccount_404(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	tokenA, _ := signupAs(t, r, "iget-a@example.com")
 	tokenB, _ := signupAs(t, r, "iget-b@example.com")
 	pubA := makePubWithBrief(t, r, tokenA, "A", "brief", 1, 5)
@@ -87,7 +86,7 @@ func TestIssueGet_CrossAccount_404(t *testing.T) {
 
 func TestIssueList_OmitsBodyDocAndComputesStoryCount(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "ilist@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	pubUUID := parseUUID(t, pubID)
@@ -128,7 +127,7 @@ func TestIssueList_OmitsBodyDocAndComputesStoryCount(t *testing.T) {
 
 func TestIssueList_StateFilter(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "ifilter@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	pubUUID := parseUUID(t, pubID)
@@ -160,7 +159,7 @@ func TestIssueList_StateFilter(t *testing.T) {
 
 func TestIssueList_DateRange(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "irange@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	pubUUID := parseUUID(t, pubID)
@@ -187,7 +186,7 @@ func TestIssueList_DateRange(t *testing.T) {
 
 func TestIssueList_CursorPagination(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	token, _ := signupAs(t, r, "ipage@example.com")
 	pubID := makePubWithBrief(t, r, token, "P", "brief", 1, 5)
 	pubUUID := parseUUID(t, pubID)
@@ -232,7 +231,7 @@ func TestIssueList_CursorPagination(t *testing.T) {
 
 func TestIssueList_CrossAccount_404(t *testing.T) {
 	truncate(t)
-	r := server.New(testPool)
+	r := newServer(t)
 	tokenA, _ := signupAs(t, r, "ilist-a@example.com")
 	tokenB, _ := signupAs(t, r, "ilist-b@example.com")
 	pubA := makePubWithBrief(t, r, tokenA, "A", "brief", 1, 5)

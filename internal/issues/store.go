@@ -214,6 +214,44 @@ func (s *Store) ListForAccount(
 	return out, next, nil
 }
 
+// BodyUpdate is the shape of an editor save: subject + title + the full
+// ProseMirror doc. No state transition — body edits happen within drafted
+// or approved.
+type BodyUpdate struct {
+	Subject string
+	Title   string
+	BodyDoc json.RawMessage
+}
+
+// UpdateBody overwrites Issue body fields, refusing if the Issue is not in
+// drafted or approved. Returns the refreshed Issue.
+func (s *Store) UpdateBody(ctx context.Context, accountID, id uuid.UUID, u BodyUpdate) (*Issue, error) {
+	// Account-scoped read to confirm ownership + state.
+	iss, err := s.GetForAccount(ctx, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	if iss.State != StateDrafted && iss.State != StateApproved {
+		return nil, ErrWrongState
+	}
+	_, err = s.pool.Exec(ctx, `
+		update issues set
+		    subject    = $2,
+		    title      = $3,
+		    body_doc   = $4::jsonb,
+		    updated_at = now()
+		where id = $1
+	`, id, u.Subject, u.Title, u.BodyDoc)
+	if err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, id)
+}
+
+// ErrWrongState is returned by UpdateBody (and Approve) when the Issue's
+// state doesn't permit the operation.
+var ErrWrongState = errors.New("issue state does not permit this operation")
+
 // ApplyTransition loads the Issue, validates the (state, event) transition,
 // updates state + the supplied content fields (any non-nil), persists. Use
 // this for every state-changing write — no direct UPDATE state=... allowed

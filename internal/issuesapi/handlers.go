@@ -66,6 +66,7 @@ func (h *Handlers) Register(r gin.IRouter) {
 	r.GET("/publications/:id/issues", h.list)
 	r.POST("/issues/:id/curate", h.curate)
 	r.POST("/issues/:id/stories/:story_id/regenerate", h.regenerate)
+	r.PUT("/issues/:id/body", h.updateBody)
 }
 
 // -----------------------------------------------------------------------------
@@ -299,6 +300,56 @@ func (h *Handlers) curate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"status": "curation_enqueued", "issue_id": id})
+}
+
+// -----------------------------------------------------------------------------
+// PUT /issues/:id/body — editor autosave
+// -----------------------------------------------------------------------------
+
+type updateBodyReq struct {
+	Subject string          `json:"subject" binding:"required"`
+	Title   string          `json:"title" binding:"required"`
+	BodyDoc json.RawMessage `json:"body_doc" binding:"required"`
+}
+
+func (h *Handlers) updateBody(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Error(c, http.StatusBadRequest, "invalid_id", "id is not a uuid")
+		return
+	}
+	var req updateBodyReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httpx.Error(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	// Soft validation — top-level type is "doc", has content.
+	var head struct {
+		Type    string `json:"type"`
+		Content []any  `json:"content"`
+	}
+	if err := json.Unmarshal(req.BodyDoc, &head); err != nil || head.Type != "doc" || len(head.Content) == 0 {
+		httpx.Error(c, http.StatusBadRequest, "invalid_body_doc",
+			"body_doc must be a ProseMirror doc with at least one content node")
+		return
+	}
+
+	updated, err := h.issues.UpdateBody(c.Request.Context(), auth.AccountID(c), id, issues.BodyUpdate{
+		Subject: req.Subject, Title: req.Title, BodyDoc: req.BodyDoc,
+	})
+	switch {
+	case errors.Is(err, issues.ErrNotFound):
+		httpx.Error(c, http.StatusNotFound, "not_found", "issue not found")
+		return
+	case errors.Is(err, issues.ErrWrongState):
+		httpx.Error(c, http.StatusConflict, "wrong_state",
+			"body edits require drafted or approved state")
+		return
+	case err != nil:
+		httpx.Error(c, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, toDetail(updated))
 }
 
 // -----------------------------------------------------------------------------

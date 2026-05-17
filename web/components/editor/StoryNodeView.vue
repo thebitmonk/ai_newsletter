@@ -1,17 +1,25 @@
-<!--
-  Story node view — two editable paragraphs (headline + body) + a delete
-  affordance + a source-URL link. Regenerate button arrives in slice #21.
--->
 <script setup lang="ts">
+import { inject } from "vue";
 import { NodeViewContent, NodeViewWrapper, type NodeViewProps } from "@tiptap/vue-3";
+
+import { RegenerateKey } from "~/composables/editorContext";
 
 const props = defineProps<NodeViewProps>();
 
+const regen = inject(RegenerateKey, null);
+const storyId = computed(() => String(props.node.attrs.storyId ?? ""));
+const isPendingThis = computed(() => regen?.pendingId.value === storyId.value);
+const pendingOther = computed(() => regen?.status.value === "pending" && !isPendingThis.value);
+
 function onDelete() {
-  // Use the editor's transaction helpers to remove this node.
   const pos = props.getPos();
   if (pos === undefined) return;
   props.editor.chain().focus().deleteRange({ from: pos, to: pos + props.node.nodeSize }).run();
+}
+
+async function onRegenerate() {
+  if (!regen || !storyId.value) return;
+  await regen.call("summary", storyId.value);
 }
 </script>
 
@@ -21,7 +29,8 @@ function onDelete() {
       data-block="story"
       :data-story-id="node.attrs.storyId"
       :data-source-url="node.attrs.sourceUrl"
-      class="group relative my-4 rounded border border-gray-200 bg-white p-4"
+      class="group relative my-4 rounded border border-gray-200 bg-white p-4 transition"
+      :class="{ 'opacity-50': isPendingThis }"
     >
       <header class="mb-2 flex items-start justify-between gap-2 text-xs text-gray-500">
         <a
@@ -33,14 +42,25 @@ function onDelete() {
         >
           source ↗
         </a>
-        <button
-          type="button"
-          class="invisible flex-shrink-0 rounded border border-red-300 px-2 py-0.5 text-red-700 hover:bg-red-50 group-hover:visible"
-          contenteditable="false"
-          @click="onDelete"
-        >
-          delete
-        </button>
+        <div class="flex flex-shrink-0 items-center gap-1" contenteditable="false">
+          <button
+            v-if="regen"
+            type="button"
+            :disabled="isPendingThis || pendingOther"
+            title="Re-generates this story via the configured LLM. Costs ~$0.005 per call."
+            class="invisible rounded border border-gray-300 px-2 py-0.5 hover:bg-gray-50 disabled:opacity-50 group-hover:visible"
+            @click="onRegenerate"
+          >
+            {{ isPendingThis ? "regenerating…" : "regenerate" }}
+          </button>
+          <button
+            type="button"
+            class="invisible rounded border border-red-300 px-2 py-0.5 text-red-700 hover:bg-red-50 group-hover:visible"
+            @click="onDelete"
+          >
+            delete
+          </button>
+        </div>
       </header>
       <NodeViewContent class="story-content prose prose-sm max-w-none" />
     </article>
@@ -48,7 +68,6 @@ function onDelete() {
 </template>
 
 <style scoped>
-.story-content :deep([data-attr-role="headline"]),
 .story-content :deep(p:first-child) {
   font-weight: 600;
   font-size: 1.05rem;

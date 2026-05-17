@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { provide } from "vue";
 import { Editor, EditorContent, VueNodeViewRenderer } from "@tiptap/vue-3";
 import StarterKit from "@tiptap/starter-kit";
 import { useDebounceFn } from "@vueuse/core";
@@ -9,6 +10,8 @@ import IntroNodeView from "~/components/editor/IntroNodeView.vue";
 import StoryNodeView from "~/components/editor/StoryNodeView.vue";
 
 import type { ApiError } from "~/composables/useApi";
+import { COVER_PENDING_ID, RegenerateKey } from "~/composables/editorContext";
+import { regenErrorMessage, useIssueRegen } from "~/composables/useIssueRegen";
 
 const route = useRoute();
 const issueId = route.params.issue_id as string;
@@ -99,6 +102,55 @@ const statusLabel = computed(() => {
     default:        return "";
   }
 });
+
+// Regenerate wiring — story summaries + cover image. Node views inject this
+// and call .call("summary"|"image", storyId).
+const regen = useIssueRegen();
+const regenStatus = ref<"idle" | "pending" | "error">("idle");
+const regenPendingId = ref<string | null>(null);
+const regenError = ref<string | null>(null);
+
+async function callRegenerate(kind: "summary" | "image", storyId: string) {
+  if (regenStatus.value === "pending") return;
+  regenStatus.value = "pending";
+  regenError.value = null;
+  regenPendingId.value = kind === "image" ? COVER_PENDING_ID : storyId;
+  try {
+    const updated =
+      kind === "summary"
+        ? await regen.regenerateStorySummary(issueId, storyId)
+        : await regen.regenerateCover(issueId, anyStoryId() ?? storyId);
+    // Replace the in-editor doc with the backend's updated body_doc so the
+    // mutation lands without us doing tree-walking client-side.
+    if (editor.value && updated.body_doc) {
+      editor.value.commands.setContent(updated.body_doc as object, false);
+    }
+    if (iss.value) {
+      iss.value.body_doc = updated.body_doc;
+      iss.value.cover_url = updated.cover_url;
+    }
+    regenStatus.value = "idle";
+  } catch (e) {
+    regenStatus.value = "error";
+    regenError.value = regenErrorMessage(e);
+  } finally {
+    regenPendingId.value = null;
+  }
+}
+
+function anyStoryId(): string | null {
+  if (!editor.value) return null;
+  const doc = editor.value.getJSON();
+  const stories = (doc.content ?? []).filter((n) => n.type === "story") as { attrs?: { storyId?: string } }[];
+  return stories[0]?.attrs?.storyId ?? null;
+}
+
+provide(RegenerateKey, {
+  call: callRegenerate,
+  status: regenStatus,
+  pendingId: regenPendingId,
+  errorMessage: regenError,
+});
 </script>
 
 <template>
@@ -144,6 +196,9 @@ const statusLabel = computed(() => {
 
       <div v-if="saveError" class="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700">
         {{ saveError }}
+      </div>
+      <div v-if="regenError" class="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+        {{ regenError }}
       </div>
 
       <ClientOnly>

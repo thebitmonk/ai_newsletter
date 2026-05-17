@@ -252,6 +252,29 @@ func (s *Store) UpdateBody(ctx context.Context, accountID, id uuid.UUID, u BodyU
 // state doesn't permit the operation.
 var ErrWrongState = errors.New("issue state does not permit this operation")
 
+// ErrApprovalWindowClosed is returned by Approve when called inside the
+// per-ADR-0007 freeze window (default 60s before scheduled_at) so a late
+// approve can't race the dispatcher.
+var ErrApprovalWindowClosed = errors.New("approval window has closed")
+
+// ApprovalFreezeWindow is how close to scheduled_at approve becomes
+// disallowed. Configurable per-Publication later; v1 is a constant.
+const ApprovalFreezeWindow = 60 * time.Second
+
+// Approve transitions a drafted Issue to approved, refusing if inside the
+// freeze window.
+func (s *Store) Approve(ctx context.Context, accountID, id uuid.UUID) (*Issue, error) {
+	iss, err := s.GetForAccount(ctx, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	if time.Until(iss.ScheduledAt) <= ApprovalFreezeWindow {
+		return nil, ErrApprovalWindowClosed
+	}
+	updated, err := s.ApplyTransition(ctx, id, EventApprove, TransitionUpdate{})
+	return updated, err
+}
+
 // ApplyTransition loads the Issue, validates the (state, event) transition,
 // updates state + the supplied content fields (any non-nil), persists. Use
 // this for every state-changing write — no direct UPDATE state=... allowed

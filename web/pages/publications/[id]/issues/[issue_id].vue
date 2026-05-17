@@ -14,8 +14,10 @@ import { COVER_PENDING_ID, RegenerateKey } from "~/composables/editorContext";
 import { regenErrorMessage, useIssueRegen } from "~/composables/useIssueRegen";
 
 const route = useRoute();
+const publicationId = route.params.id as string;
 const issueId = route.params.issue_id as string;
-const issues = useIssues(route.params.id as string);
+const issues = useIssues(publicationId);
+const pubs = usePublications();
 
 interface IssueDetail {
   id: string;
@@ -28,9 +30,16 @@ interface IssueDetail {
   failed_reason?: string | null;
 }
 
-const { data: iss, error: loadError } = await useAsyncData(`issue-${issueId}`, () =>
-  issues.get<IssueDetail>(issueId),
-);
+const [{ data: iss, error: loadError }, { data: pub }] = await Promise.all([
+  useAsyncData(`issue-${issueId}`, () => issues.get<IssueDetail>(issueId)),
+  useAsyncData(`pub-${publicationId}`, () => pubs.get(publicationId)),
+]);
+
+function onApproved(updated: unknown) {
+  if (iss.value && updated && typeof updated === "object" && "state" in updated) {
+    iss.value.state = (updated as { state: string }).state;
+  }
+}
 
 const editor = shallowRef<Editor | null>(null);
 const subject = ref("");
@@ -206,6 +215,14 @@ provide(RegenerateKey, {
           <EditorContent :editor="editor" />
         </div>
       </ClientOnly>
+
+      <ApprovalBar
+        v-if="pub?.approval_gate_enabled && (iss.state === 'drafted' || iss.state === 'approved')"
+        :issue-id="iss.id"
+        :state="iss.state"
+        :scheduled-at="iss.scheduled_at"
+        @approved="onApproved"
+      />
     </template>
   </section>
 </template>

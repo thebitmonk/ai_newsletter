@@ -67,6 +67,7 @@ func (h *Handlers) Register(r gin.IRouter) {
 	r.POST("/issues/:id/curate", h.curate)
 	r.POST("/issues/:id/stories/:story_id/regenerate", h.regenerate)
 	r.PUT("/issues/:id/body", h.updateBody)
+	r.POST("/issues/:id/approve", h.approve)
 }
 
 // -----------------------------------------------------------------------------
@@ -346,6 +347,40 @@ func (h *Handlers) updateBody(c *gin.Context) {
 			"body edits require drafted or approved state")
 		return
 	case err != nil:
+		httpx.Error(c, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, toDetail(updated))
+}
+
+// -----------------------------------------------------------------------------
+// POST /issues/:id/approve
+// -----------------------------------------------------------------------------
+
+func (h *Handlers) approve(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Error(c, http.StatusBadRequest, "invalid_id", "id is not a uuid")
+		return
+	}
+	updated, err := h.issues.Approve(c.Request.Context(), auth.AccountID(c), id)
+	switch {
+	case errors.Is(err, issues.ErrNotFound):
+		httpx.Error(c, http.StatusNotFound, "not_found", "issue not found")
+		return
+	case errors.Is(err, issues.ErrApprovalWindowClosed):
+		httpx.Error(c, http.StatusConflict, "approval_window_closed",
+			"approval window has closed; issue will be skipped or sent unapproved")
+		return
+	case err != nil:
+		// Including ErrInvalidTransition from the state machine when the
+		// issue is not in `drafted`.
+		var invalid *issues.ErrInvalidTransition
+		if errors.As(err, &invalid) {
+			httpx.Error(c, http.StatusConflict, "wrong_state",
+				"approve requires drafted state")
+			return
+		}
 		httpx.Error(c, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}

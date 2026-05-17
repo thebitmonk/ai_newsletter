@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -122,6 +123,95 @@ func (s *Store) ListByPublication(ctx context.Context, publicationID uuid.UUID) 
 		out = append(out, *iss)
 	}
 	return out, rows.Err()
+}
+
+// ListCursor pages forward through ListForAccount results. Pages are ordered
+// by (scheduled_at desc, id desc) — newest first — and the cursor encodes
+// the tuple of the last row of the previous page.
+type ListCursor struct {
+	ScheduledAt time.Time `json:"s"`
+	ID          uuid.UUID `json:"i"`
+}
+
+// ListFilter is the set of optional filters applied to ListForAccount.
+type ListFilter struct {
+	States           []State    // any of these states; empty = all
+	ScheduledAfter   *time.Time // exclusive lower bound on scheduled_at
+	ScheduledBefore  *time.Time // exclusive upper bound on scheduled_at
+}
+
+// ListForAccount returns the page of Issues under publicationID (which must
+// belong to accountID) matching filter. It returns one extra row internally
+// to detect whether a next page exists; if so the returned next-cursor is
+// non-nil.
+func (s *Store) ListForAccount(
+	ctx context.Context,
+	accountID, publicationID uuid.UUID,
+	filter ListFilter,
+	cursor *ListCursor,
+	limit int,
+) ([]Issue, *ListCursor, error) {
+	q := `
+		select ` + prefixedIssueColumns("i") + `
+		from issues i
+		join publications p on p.id = i.publication_id
+		where i.publication_id = $1 and p.account_id = $2
+	`
+	args := []any{publicationID, accountID}
+	idx := 3
+
+	if len(filter.States) > 0 {
+		states := make([]string, 0, len(filter.States))
+		for _, st := range filter.States {
+			states = append(states, string(st))
+		}
+		q += fmt.Sprintf(" and i.state = any($%d)", idx)
+		args = append(args, states)
+		idx++
+	}
+	if filter.ScheduledAfter != nil {
+		q += fmt.Sprintf(" and i.scheduled_at > $%d", idx)
+		args = append(args, *filter.ScheduledAfter)
+		idx++
+	}
+	if filter.ScheduledBefore != nil {
+		q += fmt.Sprintf(" and i.scheduled_at < $%d", idx)
+		args = append(args, *filter.ScheduledBefore)
+		idx++
+	}
+	if cursor != nil {
+		q += fmt.Sprintf(" and (i.scheduled_at, i.id) < ($%d, $%d)", idx, idx+1)
+		args = append(args, cursor.ScheduledAt, cursor.ID)
+		idx += 2
+	}
+	q += fmt.Sprintf(" order by i.scheduled_at desc, i.id desc limit $%d", idx)
+	args = append(args, limit+1)
+
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Issue, 0, limit+1)
+	for rows.Next() {
+		iss, err := scanIssueRows(rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, *iss)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	var next *ListCursor
+	if len(out) > limit {
+		last := out[limit-1]
+		next = &ListCursor{ScheduledAt: last.ScheduledAt, ID: last.ID}
+		out = out[:limit]
+	}
+	return out, next, nil
 }
 
 // ApplyTransition loads the Issue, validates the (state, event) transition,

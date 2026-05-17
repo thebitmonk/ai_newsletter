@@ -11,10 +11,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/thebitmonk/ai_newsletter/internal/blobstore"
 	"github.com/thebitmonk/ai_newsletter/internal/cadence"
 	"github.com/thebitmonk/ai_newsletter/internal/candidates"
+	"github.com/thebitmonk/ai_newsletter/internal/curation"
 	"github.com/thebitmonk/ai_newsletter/internal/db"
+	"github.com/thebitmonk/ai_newsletter/internal/imagegen"
 	"github.com/thebitmonk/ai_newsletter/internal/issues"
+	"github.com/thebitmonk/ai_newsletter/internal/llmclient"
 	"github.com/thebitmonk/ai_newsletter/internal/nsqx"
 	"github.com/thebitmonk/ai_newsletter/internal/server"
 	"github.com/thebitmonk/ai_newsletter/internal/sourceadapter"
@@ -56,9 +60,9 @@ func main() {
 }
 
 // maybeStartWorkers wires the cadence scheduler, source poller, supervisor,
-// and TTL sweep when NSQ env vars are set. Returns the server options to wire
-// (e.g. the bootstrap-on-source-create hook) and a shutdown fn. Without NSQ
-// the HTTP API still serves and the returned options slice is empty.
+// TTL sweep, and curation worker when NSQ env vars are set. Without NSQ the
+// HTTP API still serves and background processing is skipped. Returns the
+// server options to wire and a shutdown fn.
 func maybeStartWorkers(ctx context.Context, pool *pgxpool.Pool) ([]server.Option, func()) {
 	nsqdAddr := os.Getenv("NSQD_TCP_ADDR")
 	lookupdAddr := os.Getenv("NSQLOOKUPD_HTTP_ADDR")
@@ -72,8 +76,9 @@ func maybeStartWorkers(ctx context.Context, pool *pgxpool.Pool) ([]server.Option
 		log.Fatalf("workers: producer: %v", err)
 	}
 
-	// Cadence scheduler.
 	issueStore := issues.NewStore(pool)
+
+	// Cadence scheduler.
 	sched := cadence.NewScheduler(pool, prod, issueStore)
 	schedConsumer, err := nsqx.Subscribe(lookupdAddr, cadence.TickTopic, "scheduler",
 		sched.HandleTick, nsqx.ConsumerOpts{MaxInFlight: 1})
@@ -100,32 +105,79 @@ func maybeStartWorkers(ctx context.Context, pool *pgxpool.Pool) ([]server.Option
 		log.Fatalf("workers: subscribe poller: %v", err)
 	}
 
-	// Supervisor — bootstrap any overdue sources at startup.
 	sup := sourceadapter.NewSupervisor(pool, poller)
 	if err := sup.RunOnce(ctx); err != nil {
 		log.Printf("workers: supervisor: %v", err)
 	}
 
-	// TTL sweep.
 	sweepStop := startTTLSweep(ctx, candStore)
 
-	log.Printf("workers: running (cadence=%s, poll=%s)", cadence.TickTopic, sourceadapter.PollTopic)
+	// Curation worker (LLM + image + R2).
+	curationConsumer, stopCuration := maybeStartCuration(ctx, pool, issueStore, candStore, lookupdAddr)
 
-	// Hook the HTTP handler to bootstrap polling immediately on Source create.
+	log.Printf("workers: running (cadence=%s, poll=%s, curation=%s)",
+		cadence.TickTopic, sourceadapter.PollTopic, curation.StartTopic)
+
 	opts := []server.Option{
 		server.WithSourcePostCreateHook(func(id uuid.UUID) {
 			if err := poller.Bootstrap(id); err != nil {
 				log.Printf("source post-create bootstrap %s: %v", id, err)
 			}
 		}),
+		server.WithCurateTrigger(func(id uuid.UUID) error {
+			return curation.Trigger(prod, id)
+		}),
 	}
 
 	return opts, func() {
 		schedConsumer.Stop()
 		pollerConsumer.Stop()
+		if curationConsumer != nil {
+			curationConsumer.Stop()
+		}
+		stopCuration()
 		sweepStop()
 		prod.Stop()
 	}
+}
+
+// maybeStartCuration spins up the curation worker if all its required env
+// vars are present. Missing OPENAI_API_KEY / R2_* are tolerated — the manual
+// trigger endpoint still works but no consumer is processing the messages
+// (they'll queue up). This is intentional for local dev so the rest of the
+// system runs without paid creds.
+func maybeStartCuration(ctx context.Context, pool *pgxpool.Pool, is *issues.Store, cs *candidates.Store, lookupdAddr string) (*nsqx.Consumer, func()) {
+	if os.Getenv("OPENAI_API_KEY") == "" {
+		log.Printf("curation: OPENAI_API_KEY unset, worker disabled (manual trigger will still enqueue)")
+		return nil, func() {}
+	}
+
+	r2Cfg, err := blobstore.LoadR2ConfigFromEnv()
+	if err != nil {
+		log.Printf("curation: R2 env missing, worker disabled: %v", err)
+		return nil, func() {}
+	}
+	r2, err := blobstore.NewR2(ctx, r2Cfg)
+	if err != nil {
+		log.Fatalf("curation: r2 init: %v", err)
+	}
+
+	llm, err := llmclient.NewFromEnv()
+	if err != nil {
+		log.Fatalf("curation: llm: %v", err)
+	}
+	ig, err := imagegen.NewFromEnv(r2)
+	if err != nil {
+		log.Fatalf("curation: imagegen: %v", err)
+	}
+
+	worker := curation.NewWorker(pool, is, cs, llm, llm, ig)
+	consumer, err := nsqx.Subscribe(lookupdAddr, curation.StartTopic, "curator",
+		worker.HandleMessage, nsqx.ConsumerOpts{MaxInFlight: 2})
+	if err != nil {
+		log.Fatalf("curation: subscribe: %v", err)
+	}
+	return consumer, func() {}
 }
 
 func startTTLSweep(ctx context.Context, store *candidates.Store) func() {

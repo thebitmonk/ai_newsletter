@@ -6,15 +6,19 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/thebitmonk/ai_newsletter/internal/auth"
+	"github.com/thebitmonk/ai_newsletter/internal/issues"
+	"github.com/thebitmonk/ai_newsletter/internal/issuesapi"
 	"github.com/thebitmonk/ai_newsletter/internal/publications"
 	"github.com/thebitmonk/ai_newsletter/internal/sources"
 )
 
 type config struct {
 	sourcePostCreate sources.PostCreateHook
+	curateTriggerFn  func(uuid.UUID) error
 }
 
 // Option mutates the server config.
@@ -25,6 +29,12 @@ type Option func(*config)
 // Source immediately rather than waiting for the supervisor sweep.
 func WithSourcePostCreateHook(h sources.PostCreateHook) Option {
 	return func(c *config) { c.sourcePostCreate = h }
+}
+
+// WithCurateTrigger wires the manual-curate endpoint (POST /issues/:id/curate).
+// Without this option the endpoint returns 503.
+func WithCurateTrigger(fn func(uuid.UUID) error) Option {
+	return func(c *config) { c.curateTriggerFn = fn }
 }
 
 // New returns a fully-wired Gin engine. The caller owns the pool's lifecycle.
@@ -41,6 +51,7 @@ func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
 	if cfg.sourcePostCreate != nil {
 		srcHandlers.SetPostCreateHook(cfg.sourcePostCreate)
 	}
+	issueHandlers := issuesapi.NewHandlers(issues.NewStore(pool), cfg.curateTriggerFn)
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -59,6 +70,7 @@ func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
 	})
 	pubHandlers.Register(authed)
 	srcHandlers.Register(authed)
+	issueHandlers.Register(authed)
 
 	return r
 }

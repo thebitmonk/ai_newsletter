@@ -43,3 +43,19 @@ test: ## Run all tests
 
 tidy: ## Tidy go modules
 	go mod tidy
+
+dev: ## Run backend + frontend concurrently for local dev (Ctrl-C stops both)
+	@command -v npm >/dev/null || { echo "npm required"; exit 1; }
+	@cd web && [ -d node_modules ] || npm install
+	@( set -a && . ./.env && set +a && go run ./cmd/server ) & \
+	  GO_PID=$$!; \
+	  ( cd web && npm run dev ) & \
+	  NUXT_PID=$$!; \
+	  trap "kill $$GO_PID $$NUXT_PID 2>/dev/null" INT TERM; \
+	  wait
+
+web-install: ## Install frontend dependencies
+	cd web && npm install
+
+web-test: ## Run frontend vitest suite
+	cd web && npm test

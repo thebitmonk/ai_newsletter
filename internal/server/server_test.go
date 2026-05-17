@@ -17,6 +17,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/thebitmonk/ai_newsletter/internal/server"
@@ -77,7 +78,7 @@ func migrateUp(dbURL string) error {
 func truncate(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`truncate sources, publications, sessions, account_members, users, accounts cascade`)
+		`truncate issues, sources, publications, sessions, account_members, users, accounts cascade`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -94,6 +95,15 @@ func signupAs(t *testing.T, r http.Handler, email string) (token, accountID stri
 		t.Fatalf("signupAs %s failed: %v", email, body)
 	}
 	return tok, acc
+}
+
+func parseUUID(t *testing.T, s string) uuid.UUID {
+	t.Helper()
+	u, err := uuid.Parse(s)
+	if err != nil {
+		t.Fatalf("parse uuid %q: %v", s, err)
+	}
+	return u
 }
 
 func doJSON(t *testing.T, r http.Handler, method, path string, body any, bearer string) (*httptest.ResponseRecorder, map[string]any) {

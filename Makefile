@@ -59,3 +59,12 @@ web-install: ## Install frontend dependencies
 
 web-test: ## Run frontend vitest suite
 	cd web && npm test
+
+e2e-up: ## Bring up the full stack for Playwright e2e
+	./scripts/e2e-up.sh
+
+e2e-down: ## Tear down the e2e stack
+	./scripts/e2e-down.sh
+
+e2e: ## Run Playwright e2e against an already-up stack (run e2e-up first)
+	cd web && FIREBASE_PROJECT_ID=$${FIREBASE_PROJECT_ID:-ai-newsletter-dev} npx playwright test

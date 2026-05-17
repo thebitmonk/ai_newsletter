@@ -1,11 +1,12 @@
 // Package issuesapi holds the HTTP handlers for Issue-related endpoints.
 //
-// At v1 it exposes a dev-only manual curation trigger (POST /issues/:id/curate)
-// that the curation worker consumes. The Issue read API (#11) will land here
-// too once #9 is merged.
+// At v1 it exposes the Issue read API (single + list), a dev-only manual
+// curation trigger, and the Story / cover regenerate endpoint added in
+// PRD #12 slice #14.
 package issuesapi
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,32 +30,42 @@ const (
 	maxListLimit     = 100
 )
 
+// Regenerator does the in-place body_doc mutations for Story / cover
+// regenerate. curation.Worker satisfies this interface; tests can stub.
+type Regenerator interface {
+	RegenerateStorySummary(ctx context.Context, iss *issues.Issue, storyID uuid.UUID) (*issues.Issue, error)
+	RegenerateCover(ctx context.Context, iss *issues.Issue) (*issues.Issue, error)
+}
+
 type Handlers struct {
-	issues     *issues.Store
-	triggerFn  func(uuid.UUID) error
+	issues      *issues.Store
+	triggerFn   func(uuid.UUID) error
+	regenerator Regenerator
 }
 
-// NewHandlers wires the issuesapi handlers. triggerFn is called by the
-// manual-curate endpoint; pass nil to disable that endpoint (it will return
-// 503 Service Unavailable).
-func NewHandlers(is *issues.Store, triggerFn func(uuid.UUID) error) *Handlers {
-	return &Handlers{issues: is, triggerFn: triggerFn}
+// NewHandlers wires the issuesapi handlers. triggerFn drives the manual
+// curate endpoint (nil → 503). regenerator drives the regenerate endpoint
+// (nil → 503).
+func NewHandlers(is *issues.Store, triggerFn func(uuid.UUID) error, regen Regenerator) *Handlers {
+	return &Handlers{issues: is, triggerFn: triggerFn, regenerator: regen}
 }
 
-// NewHandlersWithProducer is a convenience for the common case of triggering
-// via an nsqx.Producer.
-func NewHandlersWithProducer(is *issues.Store, producer *nsqx.Producer) *Handlers {
+// NewHandlersWithProducer is the convenience constructor for the common case
+// of triggering via an nsqx.Producer and using a curation.Worker as the
+// regenerator.
+func NewHandlersWithProducer(is *issues.Store, producer *nsqx.Producer, regen Regenerator) *Handlers {
 	var trig func(uuid.UUID) error
 	if producer != nil {
 		trig = func(id uuid.UUID) error { return curation.Trigger(producer, id) }
 	}
-	return NewHandlers(is, trig)
+	return NewHandlers(is, trig, regen)
 }
 
 func (h *Handlers) Register(r gin.IRouter) {
 	r.GET("/issues/:id", h.get)
 	r.GET("/publications/:id/issues", h.list)
 	r.POST("/issues/:id/curate", h.curate)
+	r.POST("/issues/:id/stories/:story_id/regenerate", h.regenerate)
 }
 
 // -----------------------------------------------------------------------------
@@ -86,7 +97,6 @@ func toDetail(i *issues.Issue) issueDetailResp {
 		Title:          i.Title,
 		CoverURL:       i.CoverURL,
 		ScheduledAt:    i.ScheduledAt,
-		// sent_at isn't a column yet (lands with the send pipeline); always nil at v1.
 		SentAt:         nil,
 		BodyDoc:        i.BodyDoc,
 		BodyDocVersion: i.BodyDocVersion,
@@ -140,8 +150,6 @@ func toSummary(i *issues.Issue) issueSummaryResp {
 	}
 }
 
-// storyCount counts nodes with data-block="story" inside body_doc. Returns 0
-// for absent / null docs (e.g. planned Issues).
 func storyCount(doc json.RawMessage) int {
 	if len(doc) == 0 || string(doc) == "null" {
 		return 0
@@ -255,8 +263,10 @@ func decodeCursor(s string) (*issues.ListCursor, error) {
 	return &c, nil
 }
 
-// curate enqueues a curation.start message for the Issue. The Issue must
-// belong to the requester's Account and be in the `planned` state.
+// -----------------------------------------------------------------------------
+// POST /issues/:id/curate
+// -----------------------------------------------------------------------------
+
 func (h *Handlers) curate(c *gin.Context) {
 	if h.triggerFn == nil {
 		httpx.Error(c, http.StatusServiceUnavailable, "no_worker",
@@ -289,4 +299,78 @@ func (h *Handlers) curate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"status": "curation_enqueued", "issue_id": id})
+}
+
+// -----------------------------------------------------------------------------
+// POST /issues/:id/stories/:story_id/regenerate
+// -----------------------------------------------------------------------------
+
+type regenerateReq struct {
+	Type string `json:"type"` // "summary" (default) or "image"
+}
+
+func (h *Handlers) regenerate(c *gin.Context) {
+	if h.regenerator == nil {
+		httpx.Error(c, http.StatusServiceUnavailable, "no_worker",
+			"regenerator is not available (LLM/image clients not configured)")
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Error(c, http.StatusBadRequest, "invalid_id", "issue id is not a uuid")
+		return
+	}
+	storyID, err := uuid.Parse(c.Param("story_id"))
+	if err != nil {
+		httpx.Error(c, http.StatusBadRequest, "invalid_story_id", "story id is not a uuid")
+		return
+	}
+
+	var req regenerateReq
+	_ = c.ShouldBindJSON(&req) // body optional; default to summary
+	if req.Type == "" {
+		req.Type = "summary"
+	}
+	if req.Type != "summary" && req.Type != "image" {
+		httpx.Error(c, http.StatusBadRequest, "invalid_type",
+			"type must be 'summary' or 'image'")
+		return
+	}
+
+	iss, err := h.issues.GetForAccount(c.Request.Context(), auth.AccountID(c), id)
+	if errors.Is(err, issues.ErrNotFound) {
+		httpx.Error(c, http.StatusNotFound, "not_found", "issue not found")
+		return
+	}
+	if err != nil {
+		httpx.Error(c, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
+	var updated *issues.Issue
+	switch req.Type {
+	case "summary":
+		updated, err = h.regenerator.RegenerateStorySummary(c.Request.Context(), iss, storyID)
+	case "image":
+		updated, err = h.regenerator.RegenerateCover(c.Request.Context(), iss)
+	}
+	switch {
+	case errors.Is(err, curation.ErrWrongState):
+		httpx.Error(c, http.StatusConflict, "wrong_state",
+			"regenerate requires drafted or approved state; issue is "+string(iss.State))
+		return
+	case errors.Is(err, curation.ErrStoryNodeNotFound):
+		httpx.Error(c, http.StatusNotFound, "story_not_found",
+			"no story node with that id in this issue")
+		return
+	case errors.Is(err, curation.ErrCandidateExpired):
+		httpx.Error(c, http.StatusGone, "candidate_expired",
+			"the originating candidate for this story has expired from the pool")
+		return
+	case err != nil:
+		httpx.Error(c, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, toDetail(updated))
 }

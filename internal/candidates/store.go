@@ -6,9 +6,11 @@ package candidates
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -121,6 +123,36 @@ func (s *Store) ListActive(ctx context.Context, publicationID uuid.UUID, since t
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ErrNotFound is returned by GetByURL when no live Candidate matches.
+var ErrNotFound = errors.New("candidate not found")
+
+// GetByURL looks up the most recent live Candidate for (publicationID, url).
+// Used by Story regenerate to recover the originating Candidate for a Story
+// node. Returns ErrNotFound if no live row matches (e.g. expired from pool).
+func (s *Store) GetByURL(ctx context.Context, publicationID uuid.UUID, url string) (*Candidate, error) {
+	row := s.pool.QueryRow(ctx, `
+		select id, publication_id, source_id, source_item_id, url, title,
+		       raw_content, fetched_at, expires_at
+		from candidates
+		where publication_id = $1 and url = $2 and expires_at > now()
+		order by fetched_at desc
+		limit 1
+	`, publicationID, url)
+	var c Candidate
+	var title *string
+	if err := row.Scan(&c.ID, &c.PublicationID, &c.SourceID, &c.SourceItemID,
+		&c.URL, &title, &c.Raw, &c.FetchedAt, &c.ExpiresAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if title != nil {
+		c.Title = *title
+	}
+	return &c, nil
 }
 
 // ExpireOlderThan deletes Candidates whose expires_at <= cutoff.

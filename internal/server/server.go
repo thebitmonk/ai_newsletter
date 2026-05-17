@@ -21,6 +21,7 @@ import (
 type config struct {
 	sourcePostCreate sources.PostCreateHook
 	curateTriggerFn  func(uuid.UUID) error
+	regenerator      issuesapi.Regenerator
 	verifier         firebaseauth.TokenVerifier
 }
 
@@ -38,6 +39,13 @@ func WithSourcePostCreateHook(h sources.PostCreateHook) Option {
 // Without this option the endpoint returns 503.
 func WithCurateTrigger(fn func(uuid.UUID) error) Option {
 	return func(c *config) { c.curateTriggerFn = fn }
+}
+
+// WithRegenerator wires the Story/cover regenerate endpoint
+// (POST /issues/:id/stories/:story_id/regenerate). Without this option the
+// endpoint returns 503.
+func WithRegenerator(r issuesapi.Regenerator) Option {
+	return func(c *config) { c.regenerator = r }
 }
 
 // WithTokenVerifier wires the Firebase ID-token verifier the Bearer middleware
@@ -64,7 +72,7 @@ func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
 	if cfg.sourcePostCreate != nil {
 		srcHandlers.SetPostCreateHook(cfg.sourcePostCreate)
 	}
-	issueHandlers := issuesapi.NewHandlers(issues.NewStore(pool), cfg.curateTriggerFn)
+	issueHandlers := issuesapi.NewHandlers(issues.NewStore(pool), cfg.curateTriggerFn, cfg.regenerator)
 
 	r := gin.New()
 	r.Use(gin.Recovery())

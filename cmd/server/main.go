@@ -119,8 +119,10 @@ func maybeStartWorkers(ctx context.Context, pool *pgxpool.Pool) ([]server.Option
 
 	sweepStop := startTTLSweep(ctx, candStore)
 
-	// Curation worker (LLM + image + R2).
-	curationConsumer, stopCuration := maybeStartCuration(ctx, pool, issueStore, candStore, lookupdAddr)
+	// Curation worker (LLM + image + R2). curationWorker is non-nil when the
+	// LLM + R2 env vars are present; it doubles as the issuesapi Regenerator
+	// (synchronous Story/cover regeneration shares the same dependencies).
+	curationConsumer, curationWorker, stopCuration := maybeStartCuration(ctx, pool, issueStore, candStore, lookupdAddr)
 
 	log.Printf("workers: running (cadence=%s, poll=%s, curation=%s)",
 		cadence.TickTopic, sourceadapter.PollTopic, curation.StartTopic)
@@ -134,6 +136,9 @@ func maybeStartWorkers(ctx context.Context, pool *pgxpool.Pool) ([]server.Option
 		server.WithCurateTrigger(func(id uuid.UUID) error {
 			return curation.Trigger(prod, id)
 		}),
+	}
+	if curationWorker != nil {
+		opts = append(opts, server.WithRegenerator(curationWorker))
 	}
 
 	return opts, func() {
@@ -153,16 +158,16 @@ func maybeStartWorkers(ctx context.Context, pool *pgxpool.Pool) ([]server.Option
 // trigger endpoint still works but no consumer is processing the messages
 // (they'll queue up). This is intentional for local dev so the rest of the
 // system runs without paid creds.
-func maybeStartCuration(ctx context.Context, pool *pgxpool.Pool, is *issues.Store, cs *candidates.Store, lookupdAddr string) (*nsqx.Consumer, func()) {
+func maybeStartCuration(ctx context.Context, pool *pgxpool.Pool, is *issues.Store, cs *candidates.Store, lookupdAddr string) (*nsqx.Consumer, *curation.Worker, func()) {
 	if os.Getenv("OPENAI_API_KEY") == "" {
 		log.Printf("curation: OPENAI_API_KEY unset, worker disabled (manual trigger will still enqueue)")
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 
 	r2Cfg, err := blobstore.LoadR2ConfigFromEnv()
 	if err != nil {
 		log.Printf("curation: R2 env missing, worker disabled: %v", err)
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	r2, err := blobstore.NewR2(ctx, r2Cfg)
 	if err != nil {
@@ -184,7 +189,7 @@ func maybeStartCuration(ctx context.Context, pool *pgxpool.Pool, is *issues.Stor
 	if err != nil {
 		log.Fatalf("curation: subscribe: %v", err)
 	}
-	return consumer, func() {}
+	return consumer, worker, func() {}
 }
 
 func startTTLSweep(ctx context.Context, store *candidates.Store) func() {

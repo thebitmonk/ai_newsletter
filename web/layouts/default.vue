@@ -13,7 +13,12 @@ async function onSignOut() {
       v-if="currentUser"
       class="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3"
     >
-      <NuxtLink to="/" class="font-semibold">ai_newsletter</NuxtLink>
+      <div class="flex items-center gap-4">
+        <NuxtLink to="/" class="font-semibold">ai_newsletter</NuxtLink>
+        <ClientOnly>
+          <PublicationSwitcher />
+        </ClientOnly>
+      </div>
       <div class="flex items-center gap-3 text-sm">
         <span class="text-gray-500">{{ currentUser.email }}</span>
         <button

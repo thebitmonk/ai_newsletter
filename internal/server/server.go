@@ -10,6 +10,7 @@ import (
 
 	"github.com/thebitmonk/ai_newsletter/internal/auth"
 	"github.com/thebitmonk/ai_newsletter/internal/publications"
+	"github.com/thebitmonk/ai_newsletter/internal/sources"
 )
 
 // New returns a fully-wired Gin engine. The caller owns the pool's lifecycle.
@@ -17,6 +18,7 @@ func New(pool *pgxpool.Pool) *gin.Engine {
 	sessions := auth.NewSessionStore(pool)
 	authHandlers := auth.NewHandlers(pool, sessions)
 	pubHandlers := publications.NewHandlers(publications.NewStore(pool))
+	srcHandlers := sources.NewHandlers(sources.NewStore(pool))
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -34,6 +36,7 @@ func New(pool *pgxpool.Pool) *gin.Engine {
 		})
 	})
 	pubHandlers.Register(authed)
+	srcHandlers.Register(authed)
 
 	return r
 }

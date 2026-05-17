@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const { signInWithEmail, signInWithGoogle, currentUser } = useFirebaseAuth();
+const { signUpWithEmail, signInWithGoogle, sendVerificationEmail } = useFirebaseAuth();
 
 const email = ref("");
 const password = ref("");
@@ -8,10 +8,15 @@ const submitting = ref(false);
 
 async function onSubmit() {
   error.value = null;
+  if (password.value.length < 8) {
+    error.value = "Password must be at least 8 characters.";
+    return;
+  }
   submitting.value = true;
   try {
-    await signInWithEmail(email.value, password.value);
-    await routeAfterSignIn();
+    await signUpWithEmail(email.value, password.value);
+    await sendVerificationEmail();
+    await navigateTo("/verify-email");
   } catch (e) {
     error.value = friendlyFirebaseError(e);
   } finally {
@@ -24,28 +29,18 @@ async function onGoogle() {
   submitting.value = true;
   try {
     await signInWithGoogle();
-    await routeAfterSignIn();
+    await navigateTo("/");
   } catch (e) {
     error.value = friendlyFirebaseError(e);
   } finally {
     submitting.value = false;
   }
 }
-
-async function routeAfterSignIn() {
-  const u = currentUser.value;
-  const usedPassword = u?.providerData.some((p) => p.providerId === "password");
-  if (usedPassword && !u?.emailVerified) {
-    await navigateTo("/verify-email");
-  } else {
-    await navigateTo("/");
-  }
-}
 </script>
 
 <template>
   <section class="mx-auto max-w-sm space-y-5">
-    <h1 class="text-2xl font-semibold">Sign in</h1>
+    <h1 class="text-2xl font-semibold">Create an account</h1>
 
     <form class="space-y-3" @submit.prevent="onSubmit">
       <label class="block">
@@ -59,12 +54,13 @@ async function routeAfterSignIn() {
         />
       </label>
       <label class="block">
-        <span class="text-sm text-gray-700">Password</span>
+        <span class="text-sm text-gray-700">Password (8+ chars)</span>
         <input
           v-model="password"
           type="password"
           required
-          autocomplete="current-password"
+          minlength="8"
+          autocomplete="new-password"
           class="mt-1 w-full rounded border border-gray-300 px-3 py-2"
         />
       </label>
@@ -73,7 +69,7 @@ async function routeAfterSignIn() {
         :disabled="submitting"
         class="w-full rounded bg-gray-900 px-3 py-2 text-white disabled:opacity-50"
       >
-        {{ submitting ? "Signing in…" : "Sign in" }}
+        {{ submitting ? "Creating account…" : "Sign up" }}
       </button>
     </form>
 
@@ -94,9 +90,9 @@ async function routeAfterSignIn() {
       {{ error }}
     </div>
 
-    <div class="flex justify-between text-sm text-gray-500">
-      <NuxtLink to="/forgot-password" class="underline">Forgot password?</NuxtLink>
-      <NuxtLink to="/signup" class="underline">Create account</NuxtLink>
-    </div>
+    <p class="text-center text-sm text-gray-500">
+      Already have an account?
+      <NuxtLink to="/login" class="text-gray-900 underline">Sign in</NuxtLink>
+    </p>
   </section>
 </template>

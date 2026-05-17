@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/openai/openai-go"
@@ -81,24 +82,39 @@ func New(apiKey, model string, blobs blobstore.BlobStore) *Client {
 
 // Generate produces a cover image, uploads it to the blobstore, and returns
 // its public URL.
+//
+// Note on response_format: only DALL-E models accept this parameter; the
+// newer gpt-image-1 family rejects it (400 unknown_parameter) and always
+// returns b64_json. We omit response_format for gpt-image-* and set it for
+// dall-e-*.
 func (c *Client) Generate(ctx context.Context, brief string, hints PromptHints) (ImageRef, error) {
 	prompt := buildPrompt(brief, hints)
 
-	resp, err := c.openai.Images.Generate(ctx, openai.ImageGenerateParams{
-		Model:          openai.ImageModel(c.model),
-		Prompt:         prompt,
-		N:              openai.Int(1),
-		Size:           openai.ImageGenerateParamsSize1024x1024,
-		ResponseFormat: openai.ImageGenerateParamsResponseFormatB64JSON,
-	})
+	params := openai.ImageGenerateParams{
+		Model:  openai.ImageModel(c.model),
+		Prompt: prompt,
+		N:      openai.Int(1),
+		Size:   openai.ImageGenerateParamsSize1024x1024,
+	}
+	if strings.HasPrefix(c.model, "dall-e-") {
+		params.ResponseFormat = openai.ImageGenerateParamsResponseFormatB64JSON
+	}
+
+	resp, err := c.openai.Images.Generate(ctx, params)
 	if err != nil {
 		return ImageRef{}, fmt.Errorf("imagegen: openai: %w", err)
 	}
-	if len(resp.Data) == 0 || resp.Data[0].B64JSON == "" {
+	if len(resp.Data) == 0 {
 		return ImageRef{}, errors.New("imagegen: empty response")
 	}
-
-	imgBytes, err := base64.StdEncoding.DecodeString(resp.Data[0].B64JSON)
+	// gpt-image-* always returns b64; dall-e-* returns b64 only because we
+	// asked above. URL-returning paths intentionally unsupported (we want the
+	// bytes so we can persist them to R2 with our own key).
+	b64 := resp.Data[0].B64JSON
+	if b64 == "" {
+		return ImageRef{}, errors.New("imagegen: response missing b64_json")
+	}
+	imgBytes, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return ImageRef{}, fmt.Errorf("imagegen: decode b64: %w", err)
 	}

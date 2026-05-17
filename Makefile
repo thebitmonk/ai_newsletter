@@ -32,8 +32,11 @@ migrate-version: ## Show the current migration version
 build: ## Build the server binary
 	go build -o bin/server ./cmd/server
 
-run: ## Run the server
+run: ## Run the server (no env loading — pass vars yourself)
 	go run ./cmd/server
+
+run-env: ## Run the server with .env loaded
+	@set -a && . ./.env && set +a && go run ./cmd/server
 
 test: ## Run all tests
 	go test ./...

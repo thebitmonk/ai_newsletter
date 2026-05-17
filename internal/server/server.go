@@ -9,12 +9,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/thebitmonk/ai_newsletter/internal/auth"
+	"github.com/thebitmonk/ai_newsletter/internal/publications"
 )
 
 // New returns a fully-wired Gin engine. The caller owns the pool's lifecycle.
 func New(pool *pgxpool.Pool) *gin.Engine {
 	sessions := auth.NewSessionStore(pool)
 	authHandlers := auth.NewHandlers(pool, sessions)
+	pubHandlers := publications.NewHandlers(publications.NewStore(pool))
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -31,6 +33,7 @@ func New(pool *pgxpool.Pool) *gin.Engine {
 			"account_id": auth.AccountID(c),
 		})
 	})
+	pubHandlers.Register(authed)
 
 	return r
 }

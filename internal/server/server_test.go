@@ -77,10 +77,23 @@ func migrateUp(dbURL string) error {
 func truncate(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`truncate sessions, account_members, users, accounts cascade`)
+		`truncate publications, sessions, account_members, users, accounts cascade`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
+}
+
+// signupAs is a test helper: creates a new account+user, returns the token.
+func signupAs(t *testing.T, r http.Handler, email string) (token, accountID string) {
+	t.Helper()
+	_, body := doJSON(t, r, http.MethodPost, "/api/v1/auth/signup",
+		map[string]string{"email": email, "password": "supersecret"}, "")
+	tok, _ := body["token"].(string)
+	acc, _ := body["account_id"].(string)
+	if tok == "" || acc == "" {
+		t.Fatalf("signupAs %s failed: %v", email, body)
+	}
+	return tok, acc
 }
 
 func doJSON(t *testing.T, r http.Handler, method, path string, body any, bearer string) (*httptest.ResponseRecorder, map[string]any) {

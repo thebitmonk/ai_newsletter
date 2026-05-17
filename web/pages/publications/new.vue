@@ -10,7 +10,10 @@ async function onSubmit(payload: PublicationCreateInput) {
   try {
     const created = await pubs.create(payload);
     current.set(created.id);
-    await navigateTo(`/publications/${created.id}/calendar`);
+    // Fresh publication has no Sources yet — the calendar would be empty.
+    // Drop the owner on /sources so the first task (adding sources) is
+    // discoverable.
+    await navigateTo(`/publications/${created.id}/sources`);
   } catch (e) {
     form.value?.setError(e as ApiError);
   }

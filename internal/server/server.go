@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/thebitmonk/ai_newsletter/internal/auth"
+	"github.com/thebitmonk/ai_newsletter/internal/candidates"
+	"github.com/thebitmonk/ai_newsletter/internal/candidatesapi"
 	"github.com/thebitmonk/ai_newsletter/internal/firebaseauth"
 	"github.com/thebitmonk/ai_newsletter/internal/issues"
 	"github.com/thebitmonk/ai_newsletter/internal/issuesapi"
@@ -73,6 +75,7 @@ func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
 		srcHandlers.SetPostCreateHook(cfg.sourcePostCreate)
 	}
 	issueHandlers := issuesapi.NewHandlers(issues.NewStore(pool), cfg.curateTriggerFn, cfg.regenerator)
+	candHandlers := candidatesapi.NewHandlers(candidates.NewStore(pool))
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -94,6 +97,7 @@ func New(pool *pgxpool.Pool, opts ...Option) *gin.Engine {
 	pubHandlers.Register(authed)
 	srcHandlers.Register(authed)
 	issueHandlers.Register(authed)
+	candHandlers.Register(authed)
 
 	return r
 }

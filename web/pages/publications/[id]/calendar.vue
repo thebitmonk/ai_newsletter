@@ -108,13 +108,11 @@ const title = computed(() =>
 </script>
 
 <template>
-  <section class="space-y-4">
-    <header class="flex flex-wrap items-center justify-between gap-2">
-      <div>
-        <h1 class="text-2xl font-semibold">Calendar</h1>
-        <p v-if="pub" class="text-sm text-gray-500">{{ pub.name }}</p>
-      </div>
-      <div class="flex items-center gap-2 text-sm">
+  <section>
+    <PublicationTabs v-if="pub" :publication="pub" />
+
+    <header class="mb-3 flex flex-wrap items-center justify-end gap-2 text-sm">
+      <div class="flex items-center gap-2">
         <div class="rounded border border-gray-300 bg-white p-0.5 text-xs">
           <button
             v-for="v in ['month', 'week'] as const"

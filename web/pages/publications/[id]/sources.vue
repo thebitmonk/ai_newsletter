@@ -123,12 +123,10 @@ function relativeTime(iso: string | null): string {
 </script>
 
 <template>
-  <section class="mx-auto max-w-3xl space-y-5">
-    <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold">Sources</h1>
-        <p v-if="pub" class="text-sm text-gray-500">for {{ pub.name }}</p>
-      </div>
+  <section class="mx-auto max-w-3xl">
+    <PublicationTabs v-if="pub" :publication="pub" />
+
+    <header class="mb-3 flex items-center justify-end">
       <button
         type="button"
         class="rounded bg-gray-900 px-3 py-2 text-sm text-white"

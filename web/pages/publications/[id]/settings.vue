@@ -40,13 +40,12 @@ async function onDelete() {
 </script>
 
 <template>
-  <section class="mx-auto max-w-xl space-y-4">
-    <header class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold">Settings</h1>
-      <div class="text-xs text-gray-500">
-        <span v-if="savedAt">Saved {{ savedAt.toLocaleTimeString() }}</span>
-      </div>
-    </header>
+  <section class="mx-auto max-w-xl">
+    <PublicationTabs v-if="pub" :publication="pub" />
+
+    <div v-if="savedAt" class="mb-3 text-right text-xs text-emerald-600">
+      Saved {{ savedAt.toLocaleTimeString() }}
+    </div>
 
     <div v-if="loadError" class="rounded border border-red-300 bg-red-50 p-3 text-sm">
       Couldn't load this publication: {{ loadError.message }}

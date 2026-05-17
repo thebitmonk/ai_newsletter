@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -127,6 +128,82 @@ func (s *Store) ListActive(ctx context.Context, publicationID uuid.UUID, since t
 
 // ErrNotFound is returned by GetByURL when no live Candidate matches.
 var ErrNotFound = errors.New("candidate not found")
+
+// ListCursor pages forward through ListForAccount. Encodes the last row's
+// (fetched_at, id) tuple — same pattern as issues.ListCursor.
+type ListCursor struct {
+	FetchedAt time.Time `json:"f"`
+	ID        uuid.UUID `json:"i"`
+}
+
+// PoolItem is a Candidate joined with enough Source info to render a
+// pool-view row without a per-row second query.
+type PoolItem struct {
+	Candidate
+	SourceType       string
+	SourceIdentifier string
+}
+
+// ListForAccount returns one page of live (non-expired) Candidates for one
+// Publication, account-scoped via the parent. Returns one extra row
+// internally to derive next_cursor cleanly.
+func (s *Store) ListForAccount(
+	ctx context.Context,
+	accountID, publicationID uuid.UUID,
+	cursor *ListCursor,
+	limit int,
+) ([]PoolItem, *ListCursor, error) {
+	q := `
+		select c.id, c.publication_id, c.source_id, c.source_item_id, c.url, c.title,
+		       c.raw_content, c.fetched_at, c.expires_at,
+		       s.type, s.identifier
+		from candidates c
+		join sources s on s.id = c.source_id
+		join publications p on p.id = c.publication_id
+		where c.publication_id = $1 and p.account_id = $2 and c.expires_at > now()
+	`
+	args := []any{publicationID, accountID}
+	idx := 3
+	if cursor != nil {
+		q += fmt.Sprintf(" and (c.fetched_at, c.id) < ($%d, $%d)", idx, idx+1)
+		args = append(args, cursor.FetchedAt, cursor.ID)
+		idx += 2
+	}
+	q += fmt.Sprintf(" order by c.fetched_at desc, c.id desc limit $%d", idx)
+	args = append(args, limit+1)
+
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	out := make([]PoolItem, 0, limit+1)
+	for rows.Next() {
+		var it PoolItem
+		var title *string
+		if err := rows.Scan(&it.ID, &it.PublicationID, &it.SourceID, &it.SourceItemID,
+			&it.URL, &title, &it.Raw, &it.FetchedAt, &it.ExpiresAt,
+			&it.SourceType, &it.SourceIdentifier); err != nil {
+			return nil, nil, err
+		}
+		if title != nil {
+			it.Title = *title
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	var next *ListCursor
+	if len(out) > limit {
+		last := out[limit-1]
+		next = &ListCursor{FetchedAt: last.FetchedAt, ID: last.ID}
+		out = out[:limit]
+	}
+	return out, next, nil
+}
 
 // GetByURL looks up the most recent live Candidate for (publicationID, url).
 // Used by Story regenerate to recover the originating Candidate for a Story

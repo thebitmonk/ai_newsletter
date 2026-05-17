@@ -1,0 +1,32 @@
+[debug] [2026-05-17T17:22:33.182Z] ----------------------------------------------------------------------
+[debug] [2026-05-17T17:22:33.183Z] Command:       /usr/local/bin/node /usr/local/bin/firebase emulators:start --only auth --project ai-newsletter-dev
+[debug] [2026-05-17T17:22:33.184Z] CLI Version:   15.18.0
+[debug] [2026-05-17T17:22:33.184Z] Platform:      linux
+[debug] [2026-05-17T17:22:33.184Z] Node Version:  v24.15.0
+[debug] [2026-05-17T17:22:33.184Z] Time:          Sun May 17 2026 17:22:33 GMT+0000 (Coordinated Universal Time)
+[debug] [2026-05-17T17:22:33.184Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-05-17T17:22:33.526Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] Failed to authenticate, have you run firebase login?
+[warn] ⚠  emulators: You are not currently authenticated so some features may not work correctly. Please run firebase login to authenticate the CLI. 
+[info] i  emulators: Starting emulators: auth {"metadata":{"emulator":{"name":"hub"},"message":"Starting emulators: auth"}}
+[debug] [2026-05-17T17:22:33.584Z] [logging] Logging Emulator only supports listening on one address (127.0.0.1). Not listening on ::1
+[debug] [2026-05-17T17:22:33.584Z] assigned listening specs for emulators {"user":{"auth":[{"address":"0.0.0.0","family":"IPv4","port":9099}],"hub":[{"address":"127.0.0.1","family":"IPv4","port":4400},{"address":"::1","family":"IPv6","port":4400}],"logging":[{"address":"127.0.0.1","family":"IPv4","port":4500}]},"metadata":{"message":"assigned listening specs for emulators"}}
+[debug] [2026-05-17T17:22:33.586Z] Write emulator hub locator at /tmp/hub-ai-newsletter-dev.json
+[warn] ⚠  emulators: The Emulator UI is not starting because none of the running emulators have a UI component. {"metadata":{"emulator":{"name":"hub"},"message":"The Emulator UI is not starting because none of the running emulators have a UI component."}}
+[debug] [2026-05-17T17:22:35.927Z] Could not find VSCode notification endpoint: FetchError: request to http://localhost:40001/vscode/notify failed, reason: connect ECONNREFUSED 127.0.0.1:40001. If you are not running the Firebase SQL Connect VSCode extension, this is expected and not an issue.
+[info] 
+┌─────────────────────────────────────────────────────────────┐
+│ ✔  All emulators ready! It is now safe to connect your app. │
+└─────────────────────────────────────────────────────────────┘
+
+┌────────────────┬──────────────┐
+│ Emulator       │ Host:Port    │
+├────────────────┼──────────────┤
+│ Authentication │ 0.0.0.0:9099 │
+└────────────────┴──────────────┘
+  Emulator Hub host: 127.0.0.1 port: 4400
+  Other reserved ports: 4500
+
+Issues? Report them at https://github.com/firebase/firebase-tools/issues and attach the *-debug.log files.
+ 

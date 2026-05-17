@@ -17,17 +17,63 @@ const emit = defineEmits<{
 
 const name = ref(props.initial?.name ?? "");
 const brief = ref(props.initial?.brief ?? "");
-const timezone = ref(props.initial?.timezone ?? "UTC");
-const cadenceRule = ref(props.initial?.cadence_rule ?? "");
+const timezone = ref(props.initial?.timezone ?? guessTimezone());
+const cadenceRule = ref<string | null>(props.initial?.cadence_rule ?? null);
 const min = ref(props.initial?.stories_per_issue_min ?? 3);
 const max = ref(props.initial?.stories_per_issue_max ?? 7);
 const introEnabled = ref(props.initial?.intro_enabled ?? true);
-const leadTime = ref(props.initial?.curation_lead_time?.replace(/0m0s$/, "") ?? "24h");
+const leadTime = ref(normaliseLead(props.initial?.curation_lead_time));
 const approvalGate = ref(props.initial?.approval_gate_enabled ?? false);
 
 const submitting = ref(false);
 const errorByField = ref<Record<string, string>>({});
 const generalError = ref<string | null>(null);
+
+// Curated IANA list — covers the common cases without forcing the user to
+// know IANA naming. "Other (custom)" reveals a text field for everything else.
+const COMMON_TIMEZONES = [
+  "UTC",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Sao_Paulo",
+  "Europe/London",
+  "Europe/Berlin",
+  "Europe/Paris",
+  "Europe/Madrid",
+  "Africa/Lagos",
+  "Asia/Dubai",
+  "Asia/Kolkata",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Asia/Shanghai",
+  "Australia/Sydney",
+];
+
+function guessTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function normaliseLead(d?: string): string {
+  if (!d) return "24h";
+  return d.replace(/0m0s$/, "").replace(/0s$/, "");
+}
+
+const isCustomTimezone = ref(!COMMON_TIMEZONES.includes(timezone.value));
+const timezoneSelect = ref(isCustomTimezone.value ? "__other__" : timezone.value);
+watch(timezoneSelect, (v) => {
+  if (v === "__other__") {
+    isCustomTimezone.value = true;
+  } else {
+    isCustomTimezone.value = false;
+    timezone.value = v;
+  }
+});
 
 async function onSubmit() {
   errorByField.value = {};
@@ -43,11 +89,11 @@ async function onSubmit() {
     curation_lead_time: leadTime.value,
     approval_gate_enabled: approvalGate.value,
   };
-  // Empty cadence is treated as "no cadence". On settings page that means
-  // unset the existing one.
-  if (cadenceRule.value.trim()) {
-    payload.cadence_rule = cadenceRule.value.trim();
+  // The CadenceBuilder emits null when "No automatic schedule" is selected.
+  if (cadenceRule.value) {
+    payload.cadence_rule = cadenceRule.value;
   } else if (props.initial?.cadence_rule) {
+    // Was set, now cleared → tell the backend to unset it.
     (payload as PublicationUpdateInput).unset_cadence_rule = true;
   }
   try {
@@ -92,29 +138,31 @@ defineExpose({
       </span>
     </label>
 
-    <label class="block">
-      <span class="text-sm text-gray-700">Timezone (IANA)</span>
-      <input
-        v-model="timezone"
-        required
-        placeholder="America/New_York"
-        class="mt-1 w-full rounded border border-gray-300 px-3 py-2"
-      />
-      <span v-if="errorByField.timezone" class="mt-1 block text-xs text-red-600">{{ errorByField.timezone }}</span>
-    </label>
+    <div class="space-y-2">
+      <label class="block">
+        <span class="text-sm text-gray-700">Timezone</span>
+        <select
+          v-model="timezoneSelect"
+          class="mt-1 w-full rounded border border-gray-300 bg-white px-3 py-2 text-sm"
+        >
+          <option v-for="tz in COMMON_TIMEZONES" :key="tz" :value="tz">{{ tz }}</option>
+          <option value="__other__">Other (custom IANA name)…</option>
+        </select>
+      </label>
+      <label v-if="isCustomTimezone" class="block">
+        <span class="text-xs text-gray-500">Custom IANA timezone</span>
+        <input
+          v-model="timezone"
+          required
+          placeholder="Pacific/Auckland"
+          class="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+        />
+      </label>
+      <span v-if="errorByField.timezone" class="block text-xs text-red-600">{{ errorByField.timezone }}</span>
+    </div>
 
-    <label class="block">
-      <span class="text-sm text-gray-700">Cadence (RRULE, optional)</span>
-      <input
-        v-model="cadenceRule"
-        placeholder="FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0"
-        class="mt-1 w-full rounded border border-gray-300 px-3 py-2 font-mono text-sm"
-      />
-      <span class="mt-1 block text-xs text-gray-500">
-        Empty = ad-hoc only. See <a href="https://tools.ietf.org/html/rfc5545#section-3.3.10" class="underline" target="_blank">RFC 5545</a>.
-      </span>
-      <span v-if="errorByField.cadenceRule" class="mt-1 block text-xs text-red-600">{{ errorByField.cadenceRule }}</span>
-    </label>
+    <CadenceBuilder v-model="cadenceRule" :timezone="timezone" />
+    <span v-if="errorByField.cadenceRule" class="block text-xs text-red-600">{{ errorByField.cadenceRule }}</span>
 
     <div class="grid grid-cols-2 gap-3">
       <label class="block">

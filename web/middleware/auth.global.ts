@@ -3,7 +3,9 @@
 // - Email/password users whose email is not yet verified → /verify-email.
 // - Google users come in already verified, so they bypass the verify step.
 // SSR cannot know the auth state, so the guard is a no-op server-side; the
-// client-side hydration runs the actual check.
+// client-side hydration awaits Firebase's persisted-state restoration
+// (authReady) before deciding — otherwise the first navigation after a
+// refresh races the auth listener and bounces signed-in users to /login.
 
 const PUBLIC_PAGES = new Set([
   "/login",
@@ -12,10 +14,12 @@ const PUBLIC_PAGES = new Set([
   "/verify-email",
 ]);
 
-export default defineNuxtRouteMiddleware((to) => {
+export default defineNuxtRouteMiddleware(async (to) => {
   if (import.meta.server) return;
 
-  const { currentUser } = useFirebaseAuth();
+  const { currentUser, authReady } = useFirebaseAuth();
+  await authReady();
+
   const path = to.path;
 
   if (!currentUser.value) {
